@@ -1,3 +1,9 @@
+/*
+ * i2c.h
+ *
+ *  Created on: Nov 11, 2024
+ *      Author: hrishi
+ */
 #ifndef I2C_UTILS_H
 #define I2C_UTILS_H
 

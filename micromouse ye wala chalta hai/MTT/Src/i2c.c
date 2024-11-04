@@ -1,3 +1,10 @@
+/*
+ * i2c.h
+ *
+ *  Created on: Nov 11, 2024
+ *      Author: hrishi
+ */
+
 #include "i2c.h"
 #include "stm32f4xx_hal.h"
 #include "stm32f4xx_hal_i2c.h"
