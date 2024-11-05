@@ -24,7 +24,7 @@ uint16_t distance = 0; // Distance variable for VL53L1X sensor
 
 // PWM parameters for debugging
 uint32_t pwm_frequency = 1000;  // 1 kHz default frequency
-uint32_t duty_cycle = 50;       // 50% default duty cycle
+uint32_t duty_cycle = 69;       // 50% default duty cycle
 
 // Global variables for status tracking
 HAL_StatusTypeDef acc_status = HAL_OK, gyro_status = HAL_OK, temp_status = HAL_OK, init_status = HAL_OK;
