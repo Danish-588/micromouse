@@ -2,18 +2,13 @@
 #include "stm32f4xx_hal.h"
 #include "stm32f4xx_hal_i2c.h"
 #include "MPU6886.h"
-//#include "vl53l1x.h" // Include the VL53L1X header
 #include "i2c.h"
 #include "encoder.h"
 
-
-// Define handles for I2C
+// Define handles for I2C and timers
 I2C_HandleTypeDef hi2c1;
-
-
-// Declare TIM1 handle
 TIM_HandleTypeDef htim1;
-
+TIM_HandleTypeDef htim2;
 
 // IMU handle
 MPU6886_Handle imu6886;
@@ -25,9 +20,11 @@ float gyroX_deg = 0, gyroY_deg = 0, gyroZ_deg = 0; // Gyroscope data in degrees
 float temp = 0;
 volatile int count = 0;
 volatile int velocity = 0;
+uint16_t distance = 0; // Distance variable for VL53L1X sensor
 
-
-uint16_t distance = 0; // V
+// PWM parameters for debugging
+uint32_t pwm_frequency = 1000;  // 1 kHz default frequency
+uint32_t duty_cycle = 50;       // 50% default duty cycle
 
 // Global variables for status tracking
 HAL_StatusTypeDef acc_status = HAL_OK, gyro_status = HAL_OK, temp_status = HAL_OK, init_status = HAL_OK;
@@ -36,32 +33,34 @@ HAL_StatusTypeDef acc_status = HAL_OK, gyro_status = HAL_OK, temp_status = HAL_O
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
-static void MPU6886_Scan(void); // Function to scan I2C devices
-static void MX_TIM1_Init(void); // Function to scan I2C devices
-
-// Function to toggle LED
+static void MPU6886_Scan(void);
+static void MX_TIM1_Init(void); // TIM1 for encoder
+static void MX_TIM2_Init(void); // TIM2 for PWM generation
 void LED_Blink(void);
 
 int main(void)
 {
-	sysinit();
-
+	HAL_Init();
+    SystemClock_Config();
 
     // Initialize all configured peripherals
     MX_GPIO_Init();
     MX_TIM1_Init();
-//    MX_I2C1_Init();
+    MX_TIM2_Init();
+    MX_I2C1_Init();
 
-    // Scan for I2C devices
-//    MPU6886_Scan();
-
-    // Initialize MPU6886 (IMU)
-//    imu6886.i2cHandle = &hi2c1;
-//    init_status = MPU6886_Init(&imu6886);
+    // Initialize Encoder
     Encoder_Init(&htim1, 3);
 
-    // Initialize VL53L1X (Distance sensor)
-    // VL53L1X_Init(&hi2c1);
+    // Initialize MPU6886 (IMU)
+    imu6886.i2cHandle = &hi2c1;
+    init_status = MPU6886_Init(&imu6886);
+
+    // Start PWM on TIM2, Channel 1
+    if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1) != HAL_OK) {
+        // Handle error (e.g., light up an error LED)
+        Error_Handler();
+    }
 
     while (1)
     {
@@ -74,11 +73,16 @@ int main(void)
         // Read temperature data from MPU6886
         temp_status = MPU6886_GetTempData(&imu6886, &temp);
 
-        // Read distance data from VL53L1X and store in the distance variable
+        // Read distance data from VL53L1X (if initialized)
         // VL53L1X_ReadDistance(&hi2c1, &distance);
-//        int32_t encoder_count = Encoder_GetCount();
+
+        // Get encoder count and velocity
         count = Encoder_GetCount();
         velocity = Encoder_GetVelocity();
+
+        // Update duty cycle during debugging
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, (htim2.Init.Period + 1) * duty_cycle / 100);
+
         // Toggle the LED
         LED_Blink();
 
@@ -86,6 +90,7 @@ int main(void)
         HAL_Delay(100); // Delay in milliseconds
     }
 }
+
 
 // Function to toggle LED on C13
 void LED_Blink(void)
@@ -115,16 +120,15 @@ static void MX_I2C1_Init(void)
     }
 }
 
-
+// Initialize TIM1 for encoder
 void MX_TIM1_Init(void)
 {
-    __HAL_RCC_TIM1_CLK_ENABLE();  // Enable the TIM1 peripheral clock
+    __HAL_RCC_TIM1_CLK_ENABLE();
 
-    // Configure TIM1 in Encoder mode
     htim1.Instance = TIM1;
     htim1.Init.Prescaler = 0;
     htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-    htim1.Init.Period = 0xFFFF;  // Set to maximum value for continuous counting
+    htim1.Init.Period = 0xFFFF;
     htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
     htim1.Init.RepetitionCounter = 0;
 
@@ -139,15 +143,33 @@ void MX_TIM1_Init(void)
     encoderConfig.IC2Prescaler = TIM_ICPSC_DIV1;
     encoderConfig.IC2Filter = 0;
 
-    // Initialize TIM1 with encoder configuration
     if (HAL_TIM_Encoder_Init(&htim1, &encoderConfig) != HAL_OK)
     {
         // Initialization Error
         Error_Handler();
     }
 
-    // Set up additional settings if needed
     HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
+}
+
+// Initialize TIM2 for PWM generation
+void MX_TIM2_Init(void) {
+    TIM_OC_InitTypeDef sConfigOC = {0};
+
+    __HAL_RCC_TIM2_CLK_ENABLE();
+
+    htim2.Instance = TIM2;
+    htim2.Init.Prescaler = (SystemCoreClock / 1000000) - 1; // 1 MHz timer frequency
+    htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+    htim2.Init.Period = (1000000 / pwm_frequency) - 1; // Set PWM frequency
+    htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+    HAL_TIM_PWM_Init(&htim2);
+
+    sConfigOC.OCMode = TIM_OCMODE_PWM1;
+    sConfigOC.Pulse = (htim2.Init.Period + 1) * duty_cycle / 100; // Set duty cycle
+    sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+    sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+    HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1);
 }
 
 // Function to scan I2C devices
@@ -158,7 +180,6 @@ static void MPU6886_Scan(void)
         if (HAL_I2C_IsDeviceReady(&hi2c1, (i << 1), 1, 100) == HAL_OK)
         {
             // Device found at address i
-            // Optionally, you can set a variable here or log it
         }
     }
 }
@@ -166,27 +187,34 @@ static void MPU6886_Scan(void)
 // GPIO Initialization
 static void MX_GPIO_Init(void)
 {
-    __HAL_RCC_GPIOA_CLK_ENABLE();                         // Enable GPIOA clock for encoder pins
-    __HAL_RCC_GPIOC_CLK_ENABLE();                         // Enable GPIOC clock for LED
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOC_CLK_ENABLE();
 
     GPIO_InitTypeDef GPIO_InitStruct = {0};
 
     // Configure GPIO pins A8 and A9 for TIM1 encoder input
-    GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;        // Configure A8 and A9
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;               // Alternate Function Push-Pull
-    GPIO_InitStruct.Pull = GPIO_NOPULL;                   // No Pull-Up or Pull-Down
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;    // High frequency
-    GPIO_InitStruct.Alternate = GPIO_AF1_TIM1;            // Set Alternate Function for TIM1
-    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);               // Initialize GPIOA
+    GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF1_TIM1;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    // Configure GPIO pin PA0 for TIM2 Channel 1 (PWM output)
+    GPIO_InitStruct.Pin = GPIO_PIN_0;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF1_TIM2;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
     // Configure GPIO pin C13 (on-board LED)
-    GPIO_InitStruct.Pin = GPIO_PIN_13;                    // Pin 13
-    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;           // Push-pull mode
-    GPIO_InitStruct.Pull = GPIO_NOPULL;                   // No pull-up or pull-down resistors
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;          // Low frequency for LED control
-    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);               // Initialize GPIOC
+    GPIO_InitStruct.Pin = GPIO_PIN_13;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 }
-
 
 // Error handler function
 void Error_Handler(void)
