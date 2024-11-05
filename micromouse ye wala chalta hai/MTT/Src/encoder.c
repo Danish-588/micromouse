@@ -9,7 +9,7 @@
 
 TIM_HandleTypeDef htim1;
 static uint16_t encoder_ppr = 0;
-static int32_t last_count = 0;
+static int last_count = 0;
 static uint32_t last_time = 0;
 
 /**
@@ -53,7 +53,7 @@ void Encoder_Init(TIM_HandleTypeDef *htim, uint16_t ppr)
  * @brief Get the current raw encoder count
  * @retval Encoder count as an integer
  */
-int32_t Encoder_GetCount(void)
+int Encoder_GetCount(void)
 {
     return __HAL_TIM_GET_COUNTER(&htim1);
 }
@@ -64,7 +64,7 @@ int32_t Encoder_GetCount(void)
  */
 float Encoder_GetVelocity(void)
 {
-    int32_t current_count = __HAL_TIM_GET_COUNTER(&htim1);
+    int current_count = __HAL_TIM_GET_COUNTER(&htim1);
     uint32_t current_time = HAL_GetTick();
 
     // Calculate time difference in seconds

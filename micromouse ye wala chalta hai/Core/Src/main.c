@@ -13,6 +13,15 @@ TIM_HandleTypeDef htim2;
 // IMU handle
 MPU6886_Handle imu6886;
 
+float Kp = 1.0;  // Proportional gain
+float Ki = 0.1;  // Integral gain
+float Kd = 0.05; // Derivative gain
+
+uint32_t pwm_value = 0;
+float target_velocity = 1000; // Desired velocity in encoder counts per minute
+float previous_error = 0;
+float integral = 0;
+
 // Global variables to hold sensor data
 float accX = 0, accY = 0, accZ = 0;
 float gyroX_rad = 0, gyroY_rad = 0, gyroZ_rad = 0; // Gyroscope data in radians
@@ -38,9 +47,28 @@ static void MX_TIM1_Init(void); // TIM1 for encoder
 static void MX_TIM2_Init(void); // TIM2 for PWM generation
 void LED_Blink(void);
 
+// Function to calculate the PID output
+uint32_t PID_CalculatePWM(float current_velocity)
+{
+    float error = target_velocity - current_velocity;
+    integral += error;                     // Accumulate integral
+    float derivative = error - previous_error; // Calculate derivative
+    previous_error = error;
+
+    // PID formula
+    float output = (Kp * error) + (Ki * integral) + (Kd * derivative);
+
+    // Calculate PWM duty cycle (clamp output to valid range 0-100%)
+    pwm_value = (uint32_t)((htim2.Init.Period + 1) * output / 100.0);
+//    if (pwm_value > htim2.Init.Period) pwm_value = htim2.Init.Period;
+//    if (pwm_value < 0) pwm_value = 0;
+
+    return pwm_value;
+}
+
 int main(void)
 {
-	HAL_Init();
+    HAL_Init();
     SystemClock_Config();
 
     // Initialize all configured peripherals
@@ -64,33 +92,22 @@ int main(void)
 
     while (1)
     {
-        // Read accelerometer data from MPU6886
-        acc_status = MPU6886_GetAccelData(&imu6886, &accX, &accY, &accZ);
+        // Get encoder velocity
+        velocity = Encoder_GetVelocity(); // Assuming velocity is in counts per minute
 
-        // Read gyroscope data from MPU6886 in radians and degrees
-        gyro_status = MPU6886_GetGyroData(&imu6886, &gyroX_rad, &gyroY_rad, &gyroZ_rad, &gyroX_deg, &gyroY_deg, &gyroZ_deg);
+        // Calculate PWM based on PID control
+        uint32_t pwm_value = PID_CalculatePWM(velocity);
 
-        // Read temperature data from MPU6886
-        temp_status = MPU6886_GetTempData(&imu6886, &temp);
+        // Update duty cycle with the new PID-calculated value
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwm_value);
 
-        // Read distance data from VL53L1X (if initialized)
-        // VL53L1X_ReadDistance(&hi2c1, &distance);
-
-        // Get encoder count and velocity
-        count = Encoder_GetCount();
-        velocity = Encoder_GetVelocity();
-
-        // Update duty cycle during debugging
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, (htim2.Init.Period + 1) * duty_cycle / 100);
-
-        // Toggle the LED
+        // Optional: Add debugging information, toggle LED, etc.
         LED_Blink();
 
         // Add a small delay to control the sampling rate
-        HAL_Delay(100); // Delay in milliseconds
+//        HAL_Delay(100); // Delay in milliseconds
     }
 }
-
 
 // Function to toggle LED on C13
 void LED_Blink(void)
