@@ -1,33 +1,30 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * <h2><center>&copy; Copyright (c) 2020 STMicroelectronics.
-  * All rights reserved.</center></h2>
-  *
-  * This software component is licensed by ST under BSD 3-Clause license,
-  * the "License"; You may not use this file except in compliance with the
-  * License. You may obtain a copy of the License at:
-  *                        opensource.org/licenses/BSD-3-Clause
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file           : main.c
+ * @brief          : Main program body
+ ******************************************************************************
+ * @attention
+ *
+ * <h2><center>&copy; Copyright (c) 2021 STMicroelectronics.
+ * All rights reserved.</center></h2>
+ *
+ * This software component is licensed by ST under BSD 3-Clause license,
+ * the "License"; You may not use this file except in compliance with the
+ * License. You may obtain a copy of the License at:
+ *                        opensource.org/licenses/BSD-3-Clause
+ *
+ ******************************************************************************
+ */
 /* USER CODE END Header */
-
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <stdio.h>
-#include <string.h>
-#include <VL53L0X.h>
-
-
+#include "VL53L0X.h"
+#include "stdio.h"
+volatile uint16_t distance;
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -47,42 +44,19 @@
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
 
-//UART_HandleTypeDef huart1;
+//UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-char msg[32];
-uint16_t dist;
-uint8_t myoffset=10;
-float myscale=0.99;//Experimental
-
-VL53L0X sensor1;//Struct in "VL53L0X.h"
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_USART1_UART_Init(void);
+static void MX_USART2_UART_Init(void);
 static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
-void InitVL53(void)
-{
-  setAddress(&sensor1,0x29);//Default
 
-//  HAL_GPIO_WritePin(GPIOB,GPIO_PIN_3,GPIO_PIN_RESET); //De-select VL53L0X
-//  HAL_Delay(100);
-//  HAL_GPIO_WritePin(GPIOB,GPIO_PIN_3,GPIO_PIN_SET); //Select VL53L0X
-  HAL_Delay(200);//Wait sensor startup
-  if(!init(&sensor1,true)) //Returns 0 if fail, 1 if success.
-    {
-	snprintf(msg,sizeof(msg),"Failed to initialize\r\n");
-//	HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 0xFFFF);
-    }
-  setVcselPulsePeriod (& sensor1, VcselPeriodPreRange, 16);
-  //setVcselPulsePeriod (& sensor1, VcselPeriodFinalRange, 10);
-  setTimeout(&sensor1,500); //Max time before timeout.
-  setAddress(&sensor1,0x4); //New addr
-}
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -118,28 +92,46 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-//  MX_USART1_UART_Init();
+//  MX_USART2_UART_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
-InitVL53();
-startContinuous(&sensor1,0); //Second parameter: x ms wait
-sprintf(msg,"Identificator 0x%X \n",getWhoAmI(&sensor1)); //check sensor
-//HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 100);
+
+	// Initialise a message buffer.
+	char msgBuffer[52];
+	for (uint8_t i = 0; i < 52; i++) {
+		msgBuffer[i] = ' ';
+	}
+
+	// Initialise the VL53L0X
+	statInfo_t_VL53L0X distanceStr;
+	initVL53L0X(1, &hi2c1);
+
+	// Configure the sensor for high accuracy and speed in 20 cm.
+	setSignalRateLimit(200);
+	setVcselPulsePeriod(VcselPeriodPreRange, 10);
+	setVcselPulsePeriod(VcselPeriodFinalRange, 14);
+	setMeasurementTimingBudget(300 * 1000UL);
+
+
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-    dist=(int16_t)(readRangeContinuousMillimeters(&sensor1)*myscale)-myoffset;
-    sprintf(msg,"Read value: %u\n",dist);
-//    HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 100);
-    HAL_Delay(500);
+	while (1) {
+
+		// uint16_t distance is the distance in millimeters.
+		// statInfo_t_VL53L0X distanceStr is the statistics read from the sensor.
+		distance = readRangeSingleMillimeters(&distanceStr);
+
+		sprintf(msgBuffer, "Distance: %d\r\n", distance);
+
+//		HAL_UART_Transmit(&huart2, (uint8_t*) msgBuffer, sizeof(msgBuffer), 50);
 
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-  }
+	}
   /* USER CODE END 3 */
 }
 
@@ -156,30 +148,32 @@ void SystemClock_Config(void)
   */
   __HAL_RCC_PWR_CLK_ENABLE();
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
-  /** Initializes the CPU, AHB and APB busses clocks
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
   RCC_OscInitStruct.PLL.PLLM = 8;
-  RCC_OscInitStruct.PLL.PLLN = 336;
+  RCC_OscInitStruct.PLL.PLLN = 100;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 7;
+  RCC_OscInitStruct.PLL.PLLQ = 4;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
   }
-  /** Initializes the CPU, AHB and APB busses clocks
+  /** Initializes the CPU, AHB and APB buses clocks
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_3) != HAL_OK)
   {
     Error_Handler();
   }
@@ -220,35 +214,35 @@ static void MX_I2C1_Init(void)
 }
 
 /**
-  * @brief USART1 Initialization Function
+  * @brief USART2 Initialization Function
   * @param None
   * @retval None
   */
-//static void MX_USART1_UART_Init(void)
+//static void MX_USART2_UART_Init(void)
 //{
 //
-//  /* USER CODE BEGIN USART1_Init 0 */
+//  /* USER CODE BEGIN USART2_Init 0 */
 //
-//  /* USER CODE END USART1_Init 0 */
+//  /* USER CODE END USART2_Init 0 */
 //
-//  /* USER CODE BEGIN USART1_Init 1 */
+//  /* USER CODE BEGIN USART2_Init 1 */
 //
-//  /* USER CODE END USART1_Init 1 */
-//  huart1.Instance = USART1;
-//  huart1.Init.BaudRate = 115200;
-//  huart1.Init.WordLength = UART_WORDLENGTH_8B;
-//  huart1.Init.StopBits = UART_STOPBITS_1;
-//  huart1.Init.Parity = UART_PARITY_NONE;
-//  huart1.Init.Mode = UART_MODE_TX_RX;
-//  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-//  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-//  if (HAL_UART_Init(&huart1) != HAL_OK)
+//  /* USER CODE END USART2_Init 1 */
+//  huart2.Instance = USART2;
+//  huart2.Init.BaudRate = 115200;
+//  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+//  huart2.Init.StopBits = UART_STOPBITS_1;
+//  huart2.Init.Parity = UART_PARITY_NONE;
+//  huart2.Init.Mode = UART_MODE_TX_RX;
+//  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+//  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+//  if (HAL_UART_Init(&huart2) != HAL_OK)
 //  {
 //    Error_Handler();
 //  }
-//  /* USER CODE BEGIN USART1_Init 2 */
+//  /* USER CODE BEGIN USART2_Init 2 */
 //
-//  /* USER CODE END USART1_Init 2 */
+//  /* USER CODE END USART2_Init 2 */
 //
 //}
 
@@ -261,13 +255,12 @@ static void MX_GPIO_Init(void)
 {
 
   /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOH_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
 }
 
 /* USER CODE BEGIN 4 */
-
 
 /* USER CODE END 4 */
 
@@ -278,8 +271,10 @@ static void MX_GPIO_Init(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-
+	/* User can add his own implementation to report the HAL error return state */
+	__disable_irq();
+	while (1) {
+	}
   /* USER CODE END Error_Handler_Debug */
 }
 
@@ -295,7 +290,7 @@ void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line number,
-     tex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */

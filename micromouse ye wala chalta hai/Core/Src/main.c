@@ -97,15 +97,15 @@ int main(void)
     MX_TIM1_Init();
     MX_TIM2_Init();
     MX_TIM4_Init();
-    MX_I2C1_Init();
+//    MX_I2C1_Init();
 
     Encoder_Init(&htim1, 3);
     Encoder_Init(&htim4, 3);
 
 
-    // Initialize MPU6886 (IMU)
-    imu6886.i2cHandle = &hi2c1;
-    init_status = MPU6886_Init(&imu6886);
+//    // Initialize MPU6886 (IMU)
+//    imu6886.i2cHandle = &hi2c1;
+//    init_status = MPU6886_Init(&imu6886);
 
 
 
