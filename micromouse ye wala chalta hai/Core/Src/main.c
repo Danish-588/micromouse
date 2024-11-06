@@ -4,12 +4,23 @@
 #include "MPU6886.h"
 #include "i2c.h"
 #include "encoder.h"
+#include "vl53l0x_api.h"
+
 
 // Define handles for I2C and timers
 I2C_HandleTypeDef hi2c1;
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2; // For PWM generation on TIM2
 TIM_HandleTypeDef htim4; // For encoder on TIM4
+
+
+uint8_t Message[64];
+uint8_t MessageLen;
+
+VL53L0X_RangingMeasurementData_t RangingData;
+VL53L0X_Dev_t  vl53l0x_c; // center module
+VL53L0X_DEV    Dev = &vl53l0x_c;
+
 
 // IMU handle
 MPU6886_Handle imu6886;
@@ -44,7 +55,7 @@ HAL_StatusTypeDef acc_status = HAL_OK, gyro_status = HAL_OK, temp_status = HAL_O
 // Function prototypes
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_I2C1_Init(void);
+//static void MX_I2C1_Init(void);
 static void MPU6886_Scan(void);
 static void MX_TIM2_Init(void); // TIM2 for PWM generation
 static void MX_TIM1_Init(void); // TIM2 for PWM generation
@@ -89,6 +100,14 @@ uint32_t PID_CalculatePWM2(float current_velocity)
 
 int main(void)
 {
+
+
+    uint32_t refSpadCount;
+    uint8_t isApertureSpads;
+    uint8_t VhvSettings;
+    uint8_t PhaseCal;
+
+
     HAL_Init();
     SystemClock_Config();
 
@@ -97,11 +116,40 @@ int main(void)
     MX_TIM1_Init();
     MX_TIM2_Init();
     MX_TIM4_Init();
+    MX_I2C1_Init();
 //    MX_I2C1_Init();
 
     Encoder_Init(&htim1, 3);
     Encoder_Init(&htim4, 3);
 
+    MessageLen = sprintf((char*)Message, "msalamon.pl VL53L0X test\n\r");
+//    HAL_UART_Transmit(&huart2, Message, MessageLen, 100);
+
+    Dev->I2cHandle = &hi2c1;
+    Dev->I2cDevAddr = 0x52;
+
+//    HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_RESET); // Disable XSHUT
+    HAL_Delay(20);
+//    HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_SET); // Enable XSHUT
+    HAL_Delay(20);
+
+
+    VL53L0X_WaitDeviceBooted( Dev );
+     VL53L0X_DataInit( Dev );
+     VL53L0X_StaticInit( Dev );
+     VL53L0X_PerformRefCalibration(Dev, &VhvSettings, &PhaseCal);
+     VL53L0X_PerformRefSpadManagement(Dev, &refSpadCount, &isApertureSpads);
+     VL53L0X_SetDeviceMode(Dev, VL53L0X_DEVICEMODE_SINGLE_RANGING);
+
+     // Enable/Disable Sigma and Signal check
+     VL53L0X_SetLimitCheckEnable(Dev, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, 1);
+     VL53L0X_SetLimitCheckEnable(Dev, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, 1);
+     VL53L0X_SetLimitCheckValue(Dev, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, (FixPoint1616_t)(0.1*65536));
+     VL53L0X_SetLimitCheckValue(Dev, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, (FixPoint1616_t)(60*65536));
+     VL53L0X_SetMeasurementTimingBudgetMicroSeconds(Dev, 33000);
+     VL53L0X_SetVcselPulsePeriod(Dev, VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18);
+     VL53L0X_SetVcselPulsePeriod(Dev, VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14);
+     /* USER CODE END 2 */
 
 //    // Initialize MPU6886 (IMU)
 //    imu6886.i2cHandle = &hi2c1;
@@ -138,6 +186,18 @@ int main(void)
         // Optional: Add debugging information, toggle LED, etc.
         LED_Blink();
 
+  	  VL53L0X_PerformSingleRangingMeasurement(Dev, &RangingData);
+
+  	  if(RangingData.RangeStatus == 0)
+  	  {
+  		  MessageLen = sprintf((char*)Message, "Measured distance: %i\n\r", RangingData.RangeMilliMeter);
+//  		  HAL_UART_Transmit(&huart2, Message, MessageLen, 100);
+  	  }
+
+//  	  HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
+      /* USER CODE END WHILE */
+  	  HAL_Delay(100);
+
         // Add a small delay to control the sampling rate
 //        HAL_Delay(100); // Delay in milliseconds
     }
@@ -151,25 +211,7 @@ void LED_Blink(void)
 }
 
 // Initialize I2C1
-static void MX_I2C1_Init(void)
-{
-    hi2c1.Instance = I2C1;
-    hi2c1.Init.ClockSpeed = 100000;                       // 100kHz standard mode
-    hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
-    hi2c1.Init.OwnAddress1 = 0;
-    hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;  // 7-bit addressing
-    hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLED;
-    hi2c1.Init.OwnAddress2 = 0;
-    hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLED;
-    hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLED;
 
-    if (HAL_I2C_Init(&hi2c1) != HAL_OK)
-    {
-        // Initialization Error
-        init_status = HAL_ERROR;
-        Error_Handler();
-    }
-}
 // Initialize TIM1 for encoder
 void MX_TIM1_Init(void)
 {
@@ -315,6 +357,75 @@ static void MX_GPIO_Init(void)
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+//    HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_RESET);
+//
+//
+//    /*Configure GPIO pin : PtPin */
+//    GPIO_InitStruct.Pin = TOF_XSHUT_Pin;
+//    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+//    GPIO_InitStruct.Pull = GPIO_NOPULL;
+//    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+//    HAL_GPIO_Init(TOF_XSHUT_GPIO_Port, &GPIO_InitStruct);
+//
+//    /*Configure GPIO pin : PtPin */
+//    GPIO_InitStruct.Pin = TOF_INT_Pin;
+//    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+//    GPIO_InitStruct.Pull = GPIO_NOPULL;
+//    HAL_GPIO_Init(TOF_INT_GPIO_Port, &GPIO_InitStruct);
+}
+
+void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
+{
+
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  if(i2cHandle->Instance==I2C1)
+  {
+  /* USER CODE BEGIN I2C1_MspInit 0 */
+
+  /* USER CODE END I2C1_MspInit 0 */
+
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    /**I2C1 GPIO Configuration
+    PB8     ------> I2C1_SCL
+    PB9     ------> I2C1_SDA
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_9;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    /* I2C1 clock enable */
+    __HAL_RCC_I2C1_CLK_ENABLE();
+  /* USER CODE BEGIN I2C1_MspInit 1 */
+
+  /* USER CODE END I2C1_MspInit 1 */
+  }
+}
+
+void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
+{
+
+  if(i2cHandle->Instance==I2C1)
+  {
+  /* USER CODE BEGIN I2C1_MspDeInit 0 */
+
+  /* USER CODE END I2C1_MspDeInit 0 */
+    /* Peripheral clock disable */
+    __HAL_RCC_I2C1_CLK_DISABLE();
+
+    /**I2C1 GPIO Configuration
+    PB8     ------> I2C1_SCL
+    PB9     ------> I2C1_SDA
+    */
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_8|GPIO_PIN_9);
+
+  /* USER CODE BEGIN I2C1_MspDeInit 1 */
+
+  /* USER CODE END I2C1_MspDeInit 1 */
+  }
 }
 
 // Error Handler
