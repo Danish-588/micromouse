@@ -41,7 +41,9 @@ float integral = 0;
 // Global variables to hold sensor data
 float accX = 0, accY = 0, accZ = 0;
 float gyroX_rad = 0, gyroY_rad = 0, gyroZ_rad = 0; // Gyroscope data in radians
-float gyroX_deg = 0, gyroY_deg = 0, gyroZ_deg = 0; // Gyroscope data in degrees
+   float yaw_angle = 0.0;
+   volatile uint32_t previousTime = 0;
+float gx_deg = 0, gy_deg = 0, gz_deg = 0; // Gyroscope data in degrees
 float temp = 0;
 volatile int count = 0;
 volatile int velocity1 = 0;
@@ -175,13 +177,19 @@ int main(void)
     {
 
     	 // Read accelerometer data from MPU6886
-    	        acc_status = MPU6886_GetAccelData(&imu6886, &accX, &accY, &accZ);
+//    	        acc_status = MPU6886_GetAccelData(&imu6886, &accX, &accY, &accZ);
 
     	        // Read gyroscope data from MPU6886 in radians and degrees
-    	        gyro_status = MPU6886_GetGyroData(&imu6886, &gyroX_rad, &gyroY_rad, &gyroZ_rad, &gyroX_deg, &gyroY_deg, &gyroZ_deg);
+    	        gyro_status = MPU6886_GetGyroData(&imu6886, &gx_deg, &gy_deg, &gz_deg);
+    	        uint32_t currentTime = HAL_GetTick();
+    	                    float deltaTime = (currentTime - previousTime) / 1000.0f; // Convert ms to seconds
+    	                    previousTime = currentTime;
+
+    	                    // Integrate yaw angle in degrees
+    	                    yaw_angle = gz_deg * deltaTime;
 
     	        // Read temperature data from MPU6886
-    	        temp_status = MPU6886_GetTempData(&imu6886, &temp);
+//    	        temp_status = MPU6886_GetTempData(&imu6886, &temp);
 
     	velocity1 = Encoder_GetVelocity(&htim1);
         // Get encoder velocity
