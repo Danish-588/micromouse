@@ -28,6 +28,11 @@ VL53L0X_DEV    Dev = &vl53l0x_c;
 // IMU handle
 MPU6886_Handle imu6886;
 
+// Global variables for gyroscope bias
+float gyroBiasX = 0.0f;
+float gyroBiasY = 0.0f;
+float gyroBiasZ = 0.0f;
+
 float Kp = 1.0;  // Proportional gain
 float Ki = 0.1;  // Integral gain
 float Kd = 0.05; // Derivative gain
@@ -66,6 +71,10 @@ static void MX_TIM2_Init(void); // TIM2 for PWM generation
 static void MX_TIM1_Init(void); // TIM2 for PWM generation
 static void MX_TIM4_Init(void); // TIM4 for encoder
 void LED_Blink(void);
+
+void CalibrateGyro(void);
+void UpdateGyroBiasIfStationary(void);
+
 
 // Function to calculate the PID output
 uint32_t PID_CalculatePWM1(float current_velocity)
@@ -161,6 +170,7 @@ int main(void)
     imu6886.i2cHandle = &hi2c2;
     init_status = MPU6886_Init(&imu6886);
 
+    CalibrateGyro();
 
 
     // Start PWM on TIM2, Channel 2
@@ -499,6 +509,47 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
 
   /* USER CODE END I2C1_MspDeInit 1 */
   }
+}
+void CalibrateGyro(void)
+{
+    int32_t gyroX = 0, gyroY = 0, gyroZ = 0;
+    uint16_t samples = 1000;  // Number of samples for averaging
+
+    // Inform the user to keep the device stationary
+    // You can flash an LED or send a message if you have an output mechanism
+
+    for (uint16_t i = 0; i < samples; i++)
+    {
+        uint8_t buffer[6];
+        HAL_I2C_Mem_Read(&hi2c2, MPU6886_ADDRESS, MPU6886_GYRO_XOUT_H, 1, buffer, 6, HAL_MAX_DELAY);
+
+        gyroX += (int16_t)(buffer[0] << 8 | buffer[1]);
+        gyroY += (int16_t)(buffer[2] << 8 | buffer[3]);
+        gyroZ += (int16_t)(buffer[4] << 8 | buffer[5]);
+
+        HAL_Delay(2); // Short delay between samples
+    }
+
+    // Calculate average bias
+    gyroBiasX = gyroX / (float)samples / 131.0f;  // 131.0f is the sensitivity scale factor for ±250°/s
+    gyroBiasY = gyroY / (float)samples / 131.0f;
+    gyroBiasZ = gyroZ / (float)samples / 131.0f;
+}
+
+
+void UpdateGyroBiasIfStationary(void)
+{
+    float ax, ay, az;
+    MPU6886_ReadAccel(&ax, &ay, &az);
+
+    float accelMagnitude = sqrtf(ax * ax + ay * ay + az * az);
+
+    // Check if acceleration magnitude is approximately 1g (stationary)
+    if (fabsf(accelMagnitude - 1.0f) < 0.05f)
+    {
+        // Update gyroscope bias
+        CalibrateGyro();
+    }
 }
 
 // Error Handler
