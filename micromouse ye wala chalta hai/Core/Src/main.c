@@ -28,17 +28,17 @@ VL53L0X_DEV    Dev = &vl53l0x_c;
 // IMU handle
 MPU6886_Handle imu6886;
 
+
+int t1=0,t2=0;
 // Global variables for gyroscope bias
 float gyroBiasX = 0.0f;
 float gyroBiasY = 0.0f;
 float gyroBiasZ = 0.0f;
 
 float Kp = 1.0;  // Proportional gain
-float Ki = 0.1;  // Integral gain
+float Ki = 0.0;  // Integral gain
 float Kd = 0.05; // Derivative gain
 
-uint32_t pwm_value1= 0;
-uint32_t pwm_value2 = 0;
 float target_velocity = 1000; // Desired velocity in encoder counts per minute
 float previous_error = 0;
 float integral = 0;
@@ -75,42 +75,73 @@ void LED_Blink(void);
 void CalibrateGyro(void);
 void UpdateGyroBiasIfStationary(void);
 
+// Define counts per revolution for your encoder
+#define COUNTS_PER_REVOLUTION 1024  // Adjust this value based on your encoder specification
 
-// Function to calculate the PID output
-uint32_t PID_CalculatePWM1(float current_velocity)
+// PID Control Variables for Motor 1
+float Kp1 = 1.0f;  // Proportional gain
+float Ki1 = 0.0f;  // Integral gain
+float Kd1 = 0.05f; // Derivative gain
+float previous_error1 = 0.0f;
+float integral1 = 0.0f;
+int dir1 = 1;
+
+// PID Control Variables for Motor 2
+float Kp2 = 1.0f;  // Proportional gain
+float Ki2 = 0.0f;  // Integral gain
+float Kd2 = 0.05f; // Derivative gain
+float previous_error2 = 0.0f;
+float integral2 = 0.0f;
+int dir2 = 1;
+
+uint32_t pwm_value1 = 0;
+uint32_t pwm_value2 = 0;
+float target_rpm1 = 150.0f; // Desired velocity in RPM
+int current_rpm1=0;
+float target_rpm2 = 150.0f; // Desired velocity in RPM
+int current_rpm2=0;
+int cpr = 3000;
+
+// Update the PID_CalculatePWM1 function
+uint32_t PID_CalculatePWM1(float current_rpm1)
 {
-    float error = target_velocity - current_velocity;
-    integral += error;                     // Accumulate integral
-    float derivative = error - previous_error; // Calculate derivative
-    previous_error = error;
+    float error = target_rpm1 - current_rpm1;
+    integral1 += error;                       // Accumulate integral
+    float derivative = error - previous_error1; // Calculate derivative
+    previous_error1 = error;
 
     // PID formula
-    float output = (Kp * error) + (Ki * integral) + (Kd * derivative);
+    float output = (Kp1 * error) + (Ki1 * integral1) + (Kd1 * derivative);
 
-    // Calculate PWM duty cycle (clamp output to valid range 0-100%)
-    pwm_value1 = (uint32_t)((htim2.Init.Period + 1) * output / 100.0);
-    if (pwm_value1 > htim2.Init.Period) pwm_value1 = htim2.Init.Period;
-    if (pwm_value1 < 0) pwm_value1 = 0;
+    // Clamp output to valid range 0-1024
+    if (output > 1024.0f) output = 1024.0f;
+    if (output < 0.0f) output = 0.0f;
+
+    pwm_value1 = (uint32_t)output;
 
     return pwm_value1;
 }
-uint32_t PID_CalculatePWM2(float current_velocity)
+
+// Update the PID_CalculatePWM2 function
+uint32_t PID_CalculatePWM2(float current_rpm2)
 {
-    float error = target_velocity - current_velocity;
-    integral += error;                     // Accumulate integral
-    float derivative = error - previous_error; // Calculate derivative
-    previous_error = error;
+    float error = target_rpm2 - current_rpm2;
+    integral2 += error;                       // Accumulate integral
+    float derivative = error - previous_error2; // Calculate derivative
+    previous_error2 = error;
 
     // PID formula
-    float output = (Kp * error) + (Ki * integral) + (Kd * derivative);
+    float output = (Kp2 * error) + (Ki2 * integral2) + (Kd2 * derivative);
 
-    // Calculate PWM duty cycle (clamp output to valid range 0-100%)
-    pwm_value2 = (uint32_t)((htim2.Init.Period + 1) * output / 100.0);
-//    if (pwm_value > htim2.Init.Period) pwm_value = htim2.Init.Period;
-//    if (pwm_value < 0) pwm_value = 0;
+    // Clamp output to valid range 0-1024
+    if (output > 1024.0f) output = 1024.0f;
+    if (output < 0.0f) output = 0.0f;
 
-    return pwm_value1;
+    pwm_value2 = (uint32_t)output;
+
+    return pwm_value2;
 }
+
 
 int main(void)
 {
@@ -202,18 +233,22 @@ int main(void)
 //    	        temp_status = MPU6886_GetTempData(&imu6886, &temp);
 
     	velocity1 = Encoder_GetVelocity(&htim1);
+    	current_rpm1 = 60* velocity1/cpr;
+
         // Get encoder velocity
         velocity2 = Encoder_GetVelocity(&htim4); // Assuming velocity is in counts per minute
+    	current_rpm2 = 60* velocity2/cpr;
 
-        // Calculate PWM based on PID control
-        uint32_t pwm_value1 = PID_CalculatePWM1(velocity1);
 
-        uint32_t pwm_value2 = PID_CalculatePWM2(velocity2);
+    	// Corrected Code
+    	uint32_t pwm_value1 = PID_CalculatePWM1(current_rpm1*dir1);
+    	uint32_t pwm_value2 = PID_CalculatePWM2(current_rpm2*dir2);
+
 
         // Update duty cycle with the new PID-calculated value
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwm_value1);
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwm_value1);
 
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwm_value2);
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwm_value2);
 
         // Optional: Add debugging information, toggle LED, etc.
         LED_Blink();
