@@ -1,19 +1,60 @@
-/*
- * i2c.h
- *
- *  Created on: Nov 11, 2024
- *      Author: hrishi
- */
-#ifndef I2C_UTILS_H
-#define I2C_UTILS_H
+/**
+  ******************************************************************************
+  * File Name          : I2C.h
+  * Description        : This file provides code for the configuration
+  *                      of the I2C instances.
+  ******************************************************************************
+  * @attention
+  *
+  * <h2><center>&copy; Copyright (c) 2020 STMicroelectronics.
+  * All rights reserved.</center></h2>
+  *
+  * This software component is licensed by ST under BSD 3-Clause license,
+  * the "License"; You may not use this file except in compliance with the
+  * License. You may obtain a copy of the License at:
+  *                        opensource.org/licenses/BSD-3-Clause
+  *
+  ******************************************************************************
+  */
+/* Define to prevent recursive inclusion -------------------------------------*/
+#ifndef __i2c_H
+#define __i2c_H
+#ifdef __cplusplus
+ extern "C" {
+#endif
 
-#include "stm32f4xx_hal.h"
-#include "stm32f4xx_hal_i2c.h"
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
 
-// Function prototypes
-HAL_StatusTypeDef I2C_Init(I2C_HandleTypeDef *hi2c);
-HAL_StatusTypeDef I2C_Write(I2C_HandleTypeDef *hi2c, uint16_t devAddr, uint8_t *pData, uint16_t size);
-HAL_StatusTypeDef I2C_Read(I2C_HandleTypeDef *hi2c, uint16_t devAddr, uint8_t *pData, uint16_t size);
-HAL_StatusTypeDef I2C_IsDeviceReady(I2C_HandleTypeDef *hi2c, uint16_t devAddr);
+/* USER CODE BEGIN Includes */
 
-#endif // I2C_UTILS_H
+/* USER CODE END Includes */
+
+extern I2C_HandleTypeDef hi2c1;
+
+/* USER CODE BEGIN Private defines */
+
+/* USER CODE END Private defines */
+
+void MX_I2C1_Init(void);
+void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle);
+void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle);
+
+/* USER CODE BEGIN Prototypes */
+
+/* USER CODE END Prototypes */
+
+#ifdef __cplusplus
+}
+#endif
+#endif /*__ i2c_H */
+
+/**
+  * @}
+  */
+
+/**
+  * @}
+  */
+
+/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/

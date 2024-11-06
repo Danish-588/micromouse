@@ -5,15 +5,11 @@
  *      Author: hrish
  */
 #include "encoder.h"
-#include "encoder.h"
 
-TIM_HandleTypeDef htim1;
 static uint16_t encoder_ppr = 0;
-static int32_t last_count = 0;
-static uint32_t last_time = 0;
 
 /**
- * @brief Initialize the TIM1 for encoder mode with specified PPR.
+ * @brief Initialize the specified timer for encoder mode with specified PPR.
  * @param htim: Timer handle pointer
  * @param ppr: Pulses per revolution for the encoder
  */
@@ -21,9 +17,13 @@ void Encoder_Init(TIM_HandleTypeDef *htim, uint16_t ppr)
 {
     encoder_ppr = ppr;
 
-    __HAL_RCC_TIM1_CLK_ENABLE();
+    // Enable clock for the specific timer instance
+    if (htim->Instance == TIM1) {
+        __HAL_RCC_TIM1_CLK_ENABLE();
+    } else if (htim->Instance == TIM4) {
+        __HAL_RCC_TIM4_CLK_ENABLE();
+    }
 
-    htim->Instance = TIM1;
     htim->Init.Prescaler = 0;
     htim->Init.CounterMode = TIM_COUNTERMODE_UP;
     htim->Init.Period = 0xFFFF;
@@ -43,39 +43,42 @@ void Encoder_Init(TIM_HandleTypeDef *htim, uint16_t ppr)
 
     HAL_TIM_Encoder_Init(htim, &encoderConfig);
     HAL_TIM_Encoder_Start(htim, TIM_CHANNEL_ALL);
-
-    // Initialize time and count
-    last_count = __HAL_TIM_GET_COUNTER(htim);
-    last_time = HAL_GetTick();
 }
 
 /**
- * @brief Get the current raw encoder count
+ * @brief Get the current raw encoder count for a specified timer.
+ * @param htim: Timer handle pointer for the encoder
  * @retval Encoder count as an integer
  */
-int32_t Encoder_GetCount(void)
+int Encoder_GetCount(TIM_HandleTypeDef *htim)
 {
-    return __HAL_TIM_GET_COUNTER(&htim1);
+    return __HAL_TIM_GET_COUNTER(htim);
 }
 
 /**
- * @brief Calculate the encoder velocity in counts per second
+ * @brief Calculate the encoder velocity in counts per second for a specified timer.
+ * @param htim: Timer handle pointer for the encoder
  * @retval Velocity as a float in counts per second
  */
-float Encoder_GetVelocity(void)
+float Encoder_GetVelocity(TIM_HandleTypeDef *htim)
 {
-    int32_t current_count = __HAL_TIM_GET_COUNTER(&htim1);
+    static int last_count[2] = {0};       // Store previous count for each encoder
+    static uint32_t last_time[2] = {0};   // Store previous time for each encoder
+
+    int encoder_index = (htim->Instance == TIM1) ? 0 : 1;  // Use 0 for TIM1, 1 for TIM4
+
+    int current_count = __HAL_TIM_GET_COUNTER(htim);
     uint32_t current_time = HAL_GetTick();
 
     // Calculate time difference in seconds
-    float time_diff = (current_time - last_time) / 1000.0f; // Convert ms to seconds
+    float time_diff = (current_time - last_time[encoder_index]) / 1000.0f; // Convert ms to seconds
 
     // Calculate count difference
-    int32_t count_diff = current_count - last_count;
+    int32_t count_diff = current_count - last_count[encoder_index];
 
     // Store current count and time for the next call
-    last_count = current_count;
-    last_time = current_time;
+    last_count[encoder_index] = current_count;
+    last_time[encoder_index] = current_time;
 
     // Calculate and return velocity in counts per second
     if (time_diff > 0)

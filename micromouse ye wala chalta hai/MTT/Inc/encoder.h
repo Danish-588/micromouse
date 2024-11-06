@@ -13,10 +13,10 @@
 // Initialize the encoder
 void Encoder_Init(TIM_HandleTypeDef *htim, uint16_t ppr);
 
-// Get the current encoder count
-int32_t Encoder_GetCount(void);
+// Get the current encoder count for a specified timer
+int Encoder_GetCount(TIM_HandleTypeDef *htim);
 
-// Get the encoder velocity (counts per second)
-float Encoder_GetVelocity(void);
+// Get the encoder velocity (counts per second) for a specified timer
+float Encoder_GetVelocity(TIM_HandleTypeDef *htim);
 
 #endif /* INC_ENCODER_H_ */

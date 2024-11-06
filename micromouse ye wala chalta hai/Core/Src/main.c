@@ -4,22 +4,55 @@
 #include "MPU6886.h"
 #include "i2c.h"
 #include "encoder.h"
+#include "vl53l0x_api.h"
+
+
+I2C_HandleTypeDef hi2c2;
+
 
 // Define handles for I2C and timers
 I2C_HandleTypeDef hi2c1;
 TIM_HandleTypeDef htim1;
-TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim2; // For PWM generation on TIM2
+TIM_HandleTypeDef htim4; // For encoder on TIM4
+
+
+uint8_t Message[64];
+uint8_t MessageLen;
+
+VL53L0X_RangingMeasurementData_t RangingData;
+VL53L0X_Dev_t  vl53l0x_c; // center module
+VL53L0X_DEV    Dev = &vl53l0x_c;
+
 
 // IMU handle
 MPU6886_Handle imu6886;
 
+
+int t1=0,t2=0;
+// Global variables for gyroscope bias
+float gyroBiasX = 0.0f;
+float gyroBiasY = 0.0f;
+float gyroBiasZ = 0.0f;
+
+float Kp = 1.0;  // Proportional gain
+float Ki = 0.0;  // Integral gain
+float Kd = 0.05; // Derivative gain
+
+float target_velocity = 1000; // Desired velocity in encoder counts per minute
+float previous_error = 0;
+float integral = 0;
+
 // Global variables to hold sensor data
 float accX = 0, accY = 0, accZ = 0;
 float gyroX_rad = 0, gyroY_rad = 0, gyroZ_rad = 0; // Gyroscope data in radians
-float gyroX_deg = 0, gyroY_deg = 0, gyroZ_deg = 0; // Gyroscope data in degrees
+   float yaw_angle = 0.0;
+   volatile uint32_t previousTime = 0;
+float gx_deg = 0, gy_deg = 0, gz_deg = 0; // Gyroscope data in degrees
 float temp = 0;
 volatile int count = 0;
-volatile int velocity = 0;
+volatile int velocity1 = 0;
+volatile int velocity2= 0;
 uint16_t distance = 0; // Distance variable for VL53L1X sensor
 
 // PWM parameters for debugging
@@ -32,31 +65,150 @@ HAL_StatusTypeDef acc_status = HAL_OK, gyro_status = HAL_OK, temp_status = HAL_O
 // Function prototypes
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_I2C1_Init(void);
+//static void MX_I2C1_Init(void);
 static void MPU6886_Scan(void);
-static void MX_TIM1_Init(void); // TIM1 for encoder
 static void MX_TIM2_Init(void); // TIM2 for PWM generation
+static void MX_TIM1_Init(void); // TIM2 for PWM generation
+static void MX_TIM4_Init(void); // TIM4 for encoder
 void LED_Blink(void);
+
+void CalibrateGyro(void);
+void UpdateGyroBiasIfStationary(void);
+
+// Define counts per revolution for your encoder
+#define COUNTS_PER_REVOLUTION 1024  // Adjust this value based on your encoder specification
+
+// PID Control Variables for Motor 1
+float Kp1 = 1.0f;  // Proportional gain
+float Ki1 = 0.0f;  // Integral gain
+float Kd1 = 0.05f; // Derivative gain
+float previous_error1 = 0.0f;
+float integral1 = 0.0f;
+int dir1 = 1;
+
+// PID Control Variables for Motor 2
+float Kp2 = 1.0f;  // Proportional gain
+float Ki2 = 0.0f;  // Integral gain
+float Kd2 = 0.05f; // Derivative gain
+float previous_error2 = 0.0f;
+float integral2 = 0.0f;
+int dir2 = 1;
+
+uint32_t pwm_value1 = 0;
+uint32_t pwm_value2 = 0;
+float target_rpm1 = 150.0f; // Desired velocity in RPM
+int current_rpm1=0;
+float target_rpm2 = 150.0f; // Desired velocity in RPM
+int current_rpm2=0;
+int cpr = 3000;
+
+// Update the PID_CalculatePWM1 function
+uint32_t PID_CalculatePWM1(float current_rpm1)
+{
+    float error = target_rpm1 - current_rpm1;
+    integral1 += error;                       // Accumulate integral
+    float derivative = error - previous_error1; // Calculate derivative
+    previous_error1 = error;
+
+    // PID formula
+    float output = (Kp1 * error) + (Ki1 * integral1) + (Kd1 * derivative);
+
+    // Clamp output to valid range 0-1024
+    if (output > 1024.0f) output = 1024.0f;
+    if (output < 0.0f) output = 0.0f;
+
+    pwm_value1 = (uint32_t)output;
+
+    return pwm_value1;
+}
+
+// Update the PID_CalculatePWM2 function
+uint32_t PID_CalculatePWM2(float current_rpm2)
+{
+    float error = target_rpm2 - current_rpm2;
+    integral2 += error;                       // Accumulate integral
+    float derivative = error - previous_error2; // Calculate derivative
+    previous_error2 = error;
+
+    // PID formula
+    float output = (Kp2 * error) + (Ki2 * integral2) + (Kd2 * derivative);
+
+    // Clamp output to valid range 0-1024
+    if (output > 1024.0f) output = 1024.0f;
+    if (output < 0.0f) output = 0.0f;
+
+    pwm_value2 = (uint32_t)output;
+
+    return pwm_value2;
+}
+
 
 int main(void)
 {
-	HAL_Init();
+
+
+    uint32_t refSpadCount;
+    uint8_t isApertureSpads;
+    uint8_t VhvSettings;
+    uint8_t PhaseCal;
+
+
+    HAL_Init();
     SystemClock_Config();
 
     // Initialize all configured peripherals
     MX_GPIO_Init();
     MX_TIM1_Init();
     MX_TIM2_Init();
+    MX_TIM4_Init();
     MX_I2C1_Init();
+    MX_I2C2_Init();
+//    MX_I2C1_Init();
 
-    // Initialize Encoder
     Encoder_Init(&htim1, 3);
+    Encoder_Init(&htim4, 3);
 
-    // Initialize MPU6886 (IMU)
-    imu6886.i2cHandle = &hi2c1;
+    MessageLen = sprintf((char*)Message, "msalamon.pl VL53L0X test\n\r");
+//    HAL_UART_Transmit(&huart2, Message, MessageLen, 100);
+
+    Dev->I2cHandle = &hi2c1;
+    Dev->I2cDevAddr = 0x52;
+
+//    HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_RESET); // Disable XSHUT
+    HAL_Delay(20);
+//    HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_SET); // Enable XSHUT
+    HAL_Delay(20);
+
+
+    VL53L0X_WaitDeviceBooted( Dev );
+     VL53L0X_DataInit( Dev );
+     VL53L0X_StaticInit( Dev );
+     VL53L0X_PerformRefCalibration(Dev, &VhvSettings, &PhaseCal);
+     VL53L0X_PerformRefSpadManagement(Dev, &refSpadCount, &isApertureSpads);
+     VL53L0X_SetDeviceMode(Dev, VL53L0X_DEVICEMODE_SINGLE_RANGING);
+
+     // Enable/Disable Sigma and Signal check
+     VL53L0X_SetLimitCheckEnable(Dev, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, 1);
+     VL53L0X_SetLimitCheckEnable(Dev, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, 1);
+     VL53L0X_SetLimitCheckValue(Dev, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, (FixPoint1616_t)(0.1*65536));
+     VL53L0X_SetLimitCheckValue(Dev, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, (FixPoint1616_t)(60*65536));
+     VL53L0X_SetMeasurementTimingBudgetMicroSeconds(Dev, 33000);
+     VL53L0X_SetVcselPulsePeriod(Dev, VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18);
+     VL53L0X_SetVcselPulsePeriod(Dev, VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14);
+     /* USER CODE END 2 */
+
+//    // Initialize MPU6886 (IMU)
+    imu6886.i2cHandle = &hi2c2;
     init_status = MPU6886_Init(&imu6886);
 
-    // Start PWM on TIM2, Channel 1
+    CalibrateGyro();
+
+
+    // Start PWM on TIM2, Channel 2
+    if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2) != HAL_OK) {
+        // Handle error (e.g., light up an error LED)
+        Error_Handler();
+    }
     if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1) != HAL_OK) {
         // Handle error (e.g., light up an error LED)
         Error_Handler();
@@ -64,33 +216,59 @@ int main(void)
 
     while (1)
     {
-        // Read accelerometer data from MPU6886
-        acc_status = MPU6886_GetAccelData(&imu6886, &accX, &accY, &accZ);
 
-        // Read gyroscope data from MPU6886 in radians and degrees
-        gyro_status = MPU6886_GetGyroData(&imu6886, &gyroX_rad, &gyroY_rad, &gyroZ_rad, &gyroX_deg, &gyroY_deg, &gyroZ_deg);
+    	 // Read accelerometer data from MPU6886
+//    	        acc_status = MPU6886_GetAccelData(&imu6886, &accX, &accY, &accZ);
 
-        // Read temperature data from MPU6886
-        temp_status = MPU6886_GetTempData(&imu6886, &temp);
+    	        // Read gyroscope data from MPU6886 in radians and degrees
+    	        gyro_status = MPU6886_GetGyroData(&imu6886, &gx_deg, &gy_deg, &gz_deg);
+    	        uint32_t currentTime = HAL_GetTick();
+    	                    float deltaTime = (currentTime - previousTime) / 1000.0f; // Convert ms to seconds
+    	                    previousTime = currentTime;
 
-        // Read distance data from VL53L1X (if initialized)
-        // VL53L1X_ReadDistance(&hi2c1, &distance);
+    	                    // Integrate yaw angle in degrees
+    	                    yaw_angle = gz_deg * deltaTime;
 
-        // Get encoder count and velocity
-        count = Encoder_GetCount();
-        velocity = Encoder_GetVelocity();
+    	        // Read temperature data from MPU6886
+//    	        temp_status = MPU6886_GetTempData(&imu6886, &temp);
 
-        // Update duty cycle during debugging
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, (htim2.Init.Period + 1) * duty_cycle / 100);
+    	velocity1 = Encoder_GetVelocity(&htim1);
+    	current_rpm1 = 60* velocity1/cpr;
 
-        // Toggle the LED
+        // Get encoder velocity
+        velocity2 = Encoder_GetVelocity(&htim4); // Assuming velocity is in counts per minute
+    	current_rpm2 = 60* velocity2/cpr;
+
+
+    	// Corrected Code
+    	uint32_t pwm_value1 = PID_CalculatePWM1(current_rpm1*dir1);
+    	uint32_t pwm_value2 = PID_CalculatePWM2(current_rpm2*dir2);
+
+
+        // Update duty cycle with the new PID-calculated value
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwm_value1);
+
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwm_value2);
+
+        // Optional: Add debugging information, toggle LED, etc.
         LED_Blink();
 
+  	  VL53L0X_PerformSingleRangingMeasurement(Dev, &RangingData);
+
+  	  if(RangingData.RangeStatus == 0)
+  	  {
+  		  MessageLen = sprintf((char*)Message, "Measured distance: %i\n\r", RangingData.RangeMilliMeter);
+//  		  HAL_UART_Transmit(&huart2, Message, MessageLen, 100);
+  	  }
+
+//  	  HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
+      /* USER CODE END WHILE */
+  	  HAL_Delay(100);
+
         // Add a small delay to control the sampling rate
-        HAL_Delay(100); // Delay in milliseconds
+//        HAL_Delay(100); // Delay in milliseconds
     }
 }
-
 
 // Function to toggle LED on C13
 void LED_Blink(void)
@@ -100,25 +278,6 @@ void LED_Blink(void)
 }
 
 // Initialize I2C1
-static void MX_I2C1_Init(void)
-{
-    hi2c1.Instance = I2C1;
-    hi2c1.Init.ClockSpeed = 100000;                       // 100kHz standard mode
-    hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
-    hi2c1.Init.OwnAddress1 = 0;
-    hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;  // 7-bit addressing
-    hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLED;
-    hi2c1.Init.OwnAddress2 = 0;
-    hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLED;
-    hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLED;
-
-    if (HAL_I2C_Init(&hi2c1) != HAL_OK)
-    {
-        // Initialization Error
-        init_status = HAL_ERROR;
-        Error_Handler();
-    }
-}
 
 // Initialize TIM1 for encoder
 void MX_TIM1_Init(void)
@@ -152,6 +311,7 @@ void MX_TIM1_Init(void)
     HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
 }
 
+
 // Initialize TIM2 for PWM generation
 void MX_TIM2_Init(void) {
     TIM_OC_InitTypeDef sConfigOC = {0};
@@ -169,7 +329,40 @@ void MX_TIM2_Init(void) {
     sConfigOC.Pulse = (htim2.Init.Period + 1) * duty_cycle / 100; // Set duty cycle
     sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
     sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+    HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_2); // Use TIM_CHANNEL_2
     HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1);
+}
+
+// Initialize TIM4 for encoder
+void MX_TIM4_Init(void)
+{
+    TIM_Encoder_InitTypeDef encoderConfig = {0};
+
+    __HAL_RCC_TIM4_CLK_ENABLE();
+
+    htim4.Instance = TIM4;
+    htim4.Init.Prescaler = 0;
+    htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
+    htim4.Init.Period = 0xFFFF;
+    htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+
+    encoderConfig.EncoderMode = TIM_ENCODERMODE_TI12;
+    encoderConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
+    encoderConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
+    encoderConfig.IC1Prescaler = TIM_ICPSC_DIV1;
+    encoderConfig.IC1Filter = 0;
+    encoderConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
+    encoderConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
+    encoderConfig.IC2Prescaler = TIM_ICPSC_DIV1;
+    encoderConfig.IC2Filter = 0;
+
+    if (HAL_TIM_Encoder_Init(&htim4, &encoderConfig) != HAL_OK)
+    {
+        // Initialization Error
+        Error_Handler();
+    }
+
+    HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
 }
 
 // Function to scan I2C devices
@@ -188,9 +381,18 @@ static void MPU6886_Scan(void)
 static void MX_GPIO_Init(void)
 {
     __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
     __HAL_RCC_GPIOC_CLK_ENABLE();
 
     GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    // Configure GPIO pins B6 and B7 for TIM4 encoder input
+    GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
     // Configure GPIO pins A8 and A9 for TIM1 encoder input
     GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;
@@ -208,19 +410,189 @@ static void MX_GPIO_Init(void)
     GPIO_InitStruct.Alternate = GPIO_AF1_TIM2;
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-    // Configure GPIO pin C13 (on-board LED)
+    // Configure GPIO pin A1 for TIM2 Channel 2 (PWM output)
+    GPIO_InitStruct.Pin = GPIO_PIN_1;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF1_TIM2;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    // Configure GPIO pin C13 for LED output
     GPIO_InitStruct.Pin = GPIO_PIN_13;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    // Configure GPIO pins PB3 and PB10 for I2C2 with pull-up
+    GPIO_InitStruct.Pin = GPIO_PIN_3 | GPIO_PIN_10;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF4_I2C2;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 }
 
-// Error handler function
+void MX_I2C2_Init(void) {
+    hi2c2.Instance = I2C2;
+    hi2c2.Init.ClockSpeed = 100000;            // Set I2C clock speed (e.g., 100kHz)
+    hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;    // Duty cycle (standard mode)
+    hi2c2.Init.OwnAddress1 = 0;                // Own address, not used here
+    hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;  // 7-bit addressing mode
+    hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE; // Disable dual address mode
+    hi2c2.Init.OwnAddress2 = 0;                // Second address, not used here
+    hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE; // Disable general call
+    hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;     // Disable no-stretch mode
+
+    if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
+        // Initialization Error
+        Error_Handler();
+    }
+}
+void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
+{
+
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+
+
+
+  if(i2cHandle->Instance==I2C1)
+  {
+  /* USER CODE BEGIN I2C1_MspInit 0 */
+
+  /* USER CODE END I2C1_MspInit 0 */
+
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    /**I2C1 GPIO Configuration
+    PB8     ------> I2C1_SCL
+    PB9     ------> I2C1_SDA
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_9;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    /* I2C1 clock enable */
+    __HAL_RCC_I2C1_CLK_ENABLE();
+  /* USER CODE BEGIN I2C1_MspInit 1 */
+
+  /* USER CODE END I2C1_MspInit 1 */
+  }
+  else if(i2cHandle->Instance==I2C2)
+  {
+  /* USER CODE BEGIN I2C2_MspInit 0 */
+
+  /* USER CODE END I2C2_MspInit 0 */
+
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    /**I2C2 GPIO Configuration
+    PB10     ------> I2C2_SCL
+    PB3     ------> I2C2_SDA
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_10;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF4_I2C2;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = GPIO_PIN_3;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF9_I2C2;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    /* Peripheral clock enable */
+    __HAL_RCC_I2C2_CLK_ENABLE();
+  /* USER CODE BEGIN I2C2_MspInit 1 */
+
+  /* USER CODE END I2C2_MspInit 1 */
+  }
+
+}
+
+
+
+void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
+{
+
+  if(i2cHandle->Instance==I2C1)
+  {
+  /* USER CODE BEGIN I2C1_MspDeInit 0 */
+
+  /* USER CODE END I2C1_MspDeInit 0 */
+    /* Peripheral clock disable */
+    __HAL_RCC_I2C1_CLK_DISABLE();
+    __HAL_RCC_I2C2_CLK_DISABLE();
+
+    /**I2C1 GPIO Configuration
+    PB8     ------> I2C1_SCL
+    PB9     ------> I2C1_SDA
+    */
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_8|GPIO_PIN_9);
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_10);
+
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_3);
+
+
+  /* USER CODE BEGIN I2C1_MspDeInit 1 */
+
+  /* USER CODE END I2C1_MspDeInit 1 */
+  }
+}
+void CalibrateGyro(void)
+{
+    int32_t gyroX = 0, gyroY = 0, gyroZ = 0;
+    uint16_t samples = 1000;  // Number of samples for averaging
+
+    // Inform the user to keep the device stationary
+    // You can flash an LED or send a message if you have an output mechanism
+
+    for (uint16_t i = 0; i < samples; i++)
+    {
+        uint8_t buffer[6];
+        HAL_I2C_Mem_Read(&hi2c2, MPU6886_ADDRESS, MPU6886_GYRO_XOUT_H, 1, buffer, 6, HAL_MAX_DELAY);
+
+        gyroX += (int16_t)(buffer[0] << 8 | buffer[1]);
+        gyroY += (int16_t)(buffer[2] << 8 | buffer[3]);
+        gyroZ += (int16_t)(buffer[4] << 8 | buffer[5]);
+
+        HAL_Delay(2); // Short delay between samples
+    }
+
+    // Calculate average bias
+    gyroBiasX = gyroX / (float)samples / 131.0f;  // 131.0f is the sensitivity scale factor for ±250°/s
+    gyroBiasY = gyroY / (float)samples / 131.0f;
+    gyroBiasZ = gyroZ / (float)samples / 131.0f;
+}
+
+
+void UpdateGyroBiasIfStationary(void)
+{
+    float ax, ay, az;
+    MPU6886_ReadAccel(&ax, &ay, &az);
+
+    float accelMagnitude = sqrtf(ax * ax + ay * ay + az * az);
+
+    // Check if acceleration magnitude is approximately 1g (stationary)
+    if (fabsf(accelMagnitude - 1.0f) < 0.05f)
+    {
+        // Update gyroscope bias
+        CalibrateGyro();
+    }
+}
+
+// Error Handler
 void Error_Handler(void)
 {
     while (1)
     {
-        // Stay here to help debug
+        // Implement error handling here
     }
 }
+
