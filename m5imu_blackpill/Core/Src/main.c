@@ -1,7 +1,18 @@
 #include "main.h"
 #include "i2c.h"
-#include "gpio.h"  // Add this to include the MX_GPIO_Init() function
+#include "gpio.h"
+#include <math.h> // Include this for sqrtf and fabsf functions
 
+// Global variables for gyroscope bias
+float gyroBiasX = 0.0f;
+float gyroBiasY = 0.0f;
+float gyroBiasZ = 0.0f;
+
+
+int func1 = 0;
+int func2 = 0;
+int func3 = 0;
+int func4 = 0;
 
 float yaw = 0.0f;
 uint32_t prevTime = 0;
@@ -24,6 +35,8 @@ void MPU6886_Init(void);
 void MPU6886_ReadAccel(float* ax, float* ay, float* az);
 void MPU6886_ReadGyro(float* gx, float* gy, float* gz);
 void MPU6886_ReadTemp(float* temp);
+void CalibrateGyro(void);
+void UpdateGyroBiasIfStationary(void);
 
 // Function to initialize GPIOs (for I2C with pull-up resistors enabled)
 void MX_GPIO_Init(void)
@@ -85,6 +98,7 @@ int main(void)
 
     // Initialize MPU6886
     MPU6886_Init();
+    CalibrateGyro();
 
     prevTime = HAL_GetTick();
 
@@ -101,19 +115,60 @@ int main(void)
         prevTime = currentTime;
 
         // Integrate gyroscope Z-axis data to calculate yaw
-        yaw += sensorData[5] * deltaTime; // sensorData[5] is gyroZ
+        yaw += sensorData[5] * deltaTime; // sensorData[5] is corrected gyroZ
 
-        // Optional: Normalize yaw to 0-360 degrees
+        // Normalize yaw to 0-360 degrees
         if (yaw >= 360.0f)
             yaw -= 360.0f;
         else if (yaw < 0.0f)
             yaw += 360.0f;
 
         // Delay to sample periodically
-//        HAL_Delay(1000);
+        HAL_Delay(10); // Adjust delay as needed
     }
 }
 
+void CalibrateGyro(void)
+{
+    int32_t gyroX = 0, gyroY = 0, gyroZ = 0;
+    uint16_t samples = 1000;  // Number of samples for averaging
+
+    // Inform the user to keep the device stationary
+    // You can flash an LED or send a message if you have an output mechanism
+
+    for (uint16_t i = 0; i < samples; i++)
+    {
+        uint8_t buffer[6];
+        HAL_I2C_Mem_Read(&hi2c1, MPU6886_ADDRESS, MPU6886_GYRO_XOUT_H, 1, buffer, 6, HAL_MAX_DELAY);
+
+        gyroX += (int16_t)(buffer[0] << 8 | buffer[1]);
+        gyroY += (int16_t)(buffer[2] << 8 | buffer[3]);
+        gyroZ += (int16_t)(buffer[4] << 8 | buffer[5]);
+
+        HAL_Delay(2); // Short delay between samples
+    }
+
+    // Calculate average bias
+    gyroBiasX = gyroX / (float)samples / 131.0f;  // 131.0f is the sensitivity scale factor for ±250°/s
+    gyroBiasY = gyroY / (float)samples / 131.0f;
+    gyroBiasZ = gyroZ / (float)samples / 131.0f;
+}
+
+
+void UpdateGyroBiasIfStationary(void)
+{
+    float ax, ay, az;
+    MPU6886_ReadAccel(&ax, &ay, &az);
+
+    float accelMagnitude = sqrtf(ax * ax + ay * ay + az * az);
+
+    // Check if acceleration magnitude is approximately 1g (stationary)
+    if (fabsf(accelMagnitude - 1.0f) < 0.05f)
+    {
+        // Update gyroscope bias
+        CalibrateGyro();
+    }
+}
 
 // MPU6886 Initialization Function
 void MPU6886_Init(void)
@@ -162,13 +217,14 @@ void MPU6886_ReadGyro(float* gx, float* gy, float* gz)
 
     if (gyro_status == HAL_OK)
     {
-        *gx = (int16_t)(buffer[0] << 8 | buffer[1]) / 131.0;
-        *gy = (int16_t)(buffer[2] << 8 | buffer[3]) / 131.0;
-        *gz = (int16_t)(buffer[4] << 8 | buffer[5]) / 131.0;
+        // Convert raw data to degrees per second and subtract bias
+        *gx = ((int16_t)(buffer[0] << 8 | buffer[1]) / 131.0f) - gyroBiasX;
+        *gy = ((int16_t)(buffer[2] << 8 | buffer[3]) / 131.0f) - gyroBiasY;
+        *gz = ((int16_t)(buffer[4] << 8 | buffer[5]) / 131.0f) - gyroBiasZ;
     }
     else
     {
-        *gx = *gy = *gz = 0; // If reading fails, set to 0 for debugging
+        *gx = *gy = *gz = 0; // Handle read error
     }
 }
 
