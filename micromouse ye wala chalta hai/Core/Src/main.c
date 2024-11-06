@@ -7,6 +7,9 @@
 #include "vl53l0x_api.h"
 
 
+I2C_HandleTypeDef hi2c2;
+
+
 // Define handles for I2C and timers
 I2C_HandleTypeDef hi2c1;
 TIM_HandleTypeDef htim1;
@@ -117,6 +120,7 @@ int main(void)
     MX_TIM2_Init();
     MX_TIM4_Init();
     MX_I2C1_Init();
+    MX_I2C2_Init();
 //    MX_I2C1_Init();
 
     Encoder_Init(&htim1, 3);
@@ -152,8 +156,8 @@ int main(void)
      /* USER CODE END 2 */
 
 //    // Initialize MPU6886 (IMU)
-//    imu6886.i2cHandle = &hi2c1;
-//    init_status = MPU6886_Init(&imu6886);
+    imu6886.i2cHandle = &hi2c2;
+    init_status = MPU6886_Init(&imu6886);
 
 
 
@@ -169,6 +173,16 @@ int main(void)
 
     while (1)
     {
+
+    	 // Read accelerometer data from MPU6886
+    	        acc_status = MPU6886_GetAccelData(&imu6886, &accX, &accY, &accZ);
+
+    	        // Read gyroscope data from MPU6886 in radians and degrees
+    	        gyro_status = MPU6886_GetGyroData(&imu6886, &gyroX_rad, &gyroY_rad, &gyroZ_rad, &gyroX_deg, &gyroY_deg, &gyroZ_deg);
+
+    	        // Read temperature data from MPU6886
+    	        temp_status = MPU6886_GetTempData(&imu6886, &temp);
+
     	velocity1 = Encoder_GetVelocity(&htim1);
         // Get encoder velocity
         velocity2 = Encoder_GetVelocity(&htim4); // Assuming velocity is in counts per minute
@@ -328,20 +342,20 @@ static void MX_GPIO_Init(void)
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
     // Configure GPIO pins A8 and A9 for TIM1 encoder input
-       GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;
-       GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-       GPIO_InitStruct.Pull = GPIO_NOPULL;
-       GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-       GPIO_InitStruct.Alternate = GPIO_AF1_TIM1;
-       HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+    GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF1_TIM1;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-       // Configure GPIO pin PA0 for TIM2 Channel 1 (PWM output)
-       GPIO_InitStruct.Pin = GPIO_PIN_0;
-       GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-       GPIO_InitStruct.Pull = GPIO_NOPULL;
-       GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-       GPIO_InitStruct.Alternate = GPIO_AF1_TIM2;
-       HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+    // Configure GPIO pin PA0 for TIM2 Channel 1 (PWM output)
+    GPIO_InitStruct.Pin = GPIO_PIN_0;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF1_TIM2;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
     // Configure GPIO pin A1 for TIM2 Channel 2 (PWM output)
     GPIO_InitStruct.Pin = GPIO_PIN_1;
@@ -358,27 +372,39 @@ static void MX_GPIO_Init(void)
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-//    HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_RESET);
-//
-//
-//    /*Configure GPIO pin : PtPin */
-//    GPIO_InitStruct.Pin = TOF_XSHUT_Pin;
-//    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-//    GPIO_InitStruct.Pull = GPIO_NOPULL;
-//    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-//    HAL_GPIO_Init(TOF_XSHUT_GPIO_Port, &GPIO_InitStruct);
-//
-//    /*Configure GPIO pin : PtPin */
-//    GPIO_InitStruct.Pin = TOF_INT_Pin;
-//    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-//    GPIO_InitStruct.Pull = GPIO_NOPULL;
-//    HAL_GPIO_Init(TOF_INT_GPIO_Port, &GPIO_InitStruct);
+    // Configure GPIO pins PB3 and PB10 for I2C2 with pull-up
+    GPIO_InitStruct.Pin = GPIO_PIN_3 | GPIO_PIN_10;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF4_I2C2;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 }
 
+void MX_I2C2_Init(void) {
+    hi2c2.Instance = I2C2;
+    hi2c2.Init.ClockSpeed = 100000;            // Set I2C clock speed (e.g., 100kHz)
+    hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;    // Duty cycle (standard mode)
+    hi2c2.Init.OwnAddress1 = 0;                // Own address, not used here
+    hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;  // 7-bit addressing mode
+    hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE; // Disable dual address mode
+    hi2c2.Init.OwnAddress2 = 0;                // Second address, not used here
+    hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE; // Disable general call
+    hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;     // Disable no-stretch mode
+
+    if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
+        // Initialization Error
+        Error_Handler();
+    }
+}
 void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
 {
 
   GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+
+
+
   if(i2cHandle->Instance==I2C1)
   {
   /* USER CODE BEGIN I2C1_MspInit 0 */
@@ -403,7 +429,41 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
 
   /* USER CODE END I2C1_MspInit 1 */
   }
+  else if(i2cHandle->Instance==I2C2)
+  {
+  /* USER CODE BEGIN I2C2_MspInit 0 */
+
+  /* USER CODE END I2C2_MspInit 0 */
+
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    /**I2C2 GPIO Configuration
+    PB10     ------> I2C2_SCL
+    PB3     ------> I2C2_SDA
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_10;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF4_I2C2;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = GPIO_PIN_3;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF9_I2C2;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    /* Peripheral clock enable */
+    __HAL_RCC_I2C2_CLK_ENABLE();
+  /* USER CODE BEGIN I2C2_MspInit 1 */
+
+  /* USER CODE END I2C2_MspInit 1 */
+  }
+
 }
+
+
 
 void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
 {
@@ -415,12 +475,17 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
   /* USER CODE END I2C1_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_I2C1_CLK_DISABLE();
+    __HAL_RCC_I2C2_CLK_DISABLE();
 
     /**I2C1 GPIO Configuration
     PB8     ------> I2C1_SCL
     PB9     ------> I2C1_SDA
     */
     HAL_GPIO_DeInit(GPIOB, GPIO_PIN_8|GPIO_PIN_9);
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_10);
+
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_3);
+
 
   /* USER CODE BEGIN I2C1_MspDeInit 1 */
 
