@@ -29,6 +29,8 @@ VL53L0X_DEV    Dev = &vl53l0x_c;
 MPU6886_Handle imu6886;
 
 
+float yaw = 0.0f;
+int gyro_calib = 0;
 int t1=0,t2=0;
 // Global variables for gyroscope bias
 float gyroBiasX = 0.0f;
@@ -47,7 +49,7 @@ float integral = 0;
 float accX = 0, accY = 0, accZ = 0;
 float gyroX_rad = 0, gyroY_rad = 0, gyroZ_rad = 0; // Gyroscope data in radians
    float yaw_angle = 0.0;
-   volatile uint32_t previousTime = 0;
+   volatile uint32_t prevTime = 0;
 float gx_deg = 0, gy_deg = 0, gz_deg = 0; // Gyroscope data in degrees
 float temp = 0;
 volatile int count = 0;
@@ -71,9 +73,14 @@ static void MX_TIM2_Init(void); // TIM2 for PWM generation
 static void MX_TIM1_Init(void); // TIM2 for PWM generation
 static void MX_TIM4_Init(void); // TIM4 for encoder
 void LED_Blink(void);
+void MX_I2C2_Init(void);
 
-void CalibrateGyro(void);
+
+void CalibrateGyro(MPU6886_Handle *handle, float *gyroBiasX, float *gyroBiasY, float *gyroBiasZ);
 void UpdateGyroBiasIfStationary(void);
+
+
+float sensorData[7]; // Adjust size based on your usage
 
 // PID Control Variables for Motor 1
 float Kp1 = 10.0f;  // Proportional gain
@@ -213,8 +220,8 @@ int main(void)
     imu6886.i2cHandle = &hi2c2;
     init_status = MPU6886_Init(&imu6886);
 
-    CalibrateGyro();
-
+    CalibrateGyro(&imu6886, &gyroBiasX, &gyroBiasY, &gyroBiasZ);
+    prevTime = HAL_GetTick();
 
     // Start PWM on TIM2, Channel 2
     if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2) != HAL_OK) {
@@ -229,20 +236,27 @@ int main(void)
     while (1)
     {
 
-    	 // Read accelerometer data from MPU6886
-//    	        acc_status = MPU6886_GetAccelData(&imu6886, &accX, &accY, &accZ);
+    	if (gyro_calib && !(gyro_calib=0))
+    	    CalibrateGyro(&imu6886, &gyroBiasX, &gyroBiasY, &gyroBiasZ);
+        // Read sensor data
+        MPU6886_ReadAccelData(&imu6886, &sensorData[0], &sensorData[1], &sensorData[2]);
+        MPU6886_ReadGyroData(&imu6886, &sensorData[3], &sensorData[4], &sensorData[5], gyroBiasX, gyroBiasY, gyroBiasZ);
+        MPU6886_ReadTempData(&imu6886, &sensorData[6]);
 
-    	        // Read gyroscope data from MPU6886 in radians and degrees
-    	        gyro_status = MPU6886_GetGyroData(&imu6886, &gx_deg, &gy_deg, &gz_deg);
-    	        uint32_t currentTime = HAL_GetTick();
-    	                    float deltaTime = (currentTime - previousTime) / 1000.0f; // Convert ms to seconds
-    	                    previousTime = currentTime;
+        // Calculate time difference in seconds
+        uint32_t currentTime = HAL_GetTick();
+        float deltaTime = (currentTime - prevTime) / 1000.0f; // Convert ms to s
+        prevTime = currentTime;
 
-    	                    // Integrate yaw angle in degrees
-    	                    yaw_angle = gz_deg * deltaTime;
+        // Integrate gyroscope Z-axis data to calculate yaw
+        yaw += sensorData[5] * deltaTime; // sensorData[5] is corrected gyroZ
 
-    	        // Read temperature data from MPU6886
-//    	        temp_status = MPU6886_GetTempData(&imu6886, &temp);
+        // Normalize yaw to 0-360 degrees
+        if (yaw >= 360.0f)
+            yaw -= 360.0f;
+        else if (yaw < 0.0f)
+            yaw += 360.0f;
+
 
     	velocity1 = Encoder_GetVelocity(&htim1);
     	current_rpm1 = 60* velocity1/cpr;
@@ -273,12 +287,8 @@ int main(void)
 //  		  HAL_UART_Transmit(&huart2, Message, MessageLen, 100);
   	  }
 
-//  	  HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
-      /* USER CODE END WHILE */
-  	  HAL_Delay(100);
-
-        // Add a small delay to control the sampling rate
-//        HAL_Delay(100); // Delay in milliseconds
+        // Delay to sample periodically
+        HAL_Delay(10); // Adjust delay as needed
     }
 }
 
@@ -446,19 +456,22 @@ static void MX_GPIO_Init(void)
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 }
 
-void MX_I2C2_Init(void) {
+// Initialize I2C2
+void MX_I2C2_Init(void)
+{
     hi2c2.Instance = I2C2;
-    hi2c2.Init.ClockSpeed = 100000;            // Set I2C clock speed (e.g., 100kHz)
-    hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;    // Duty cycle (standard mode)
-    hi2c2.Init.OwnAddress1 = 0;                // Own address, not used here
-    hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;  // 7-bit addressing mode
-    hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE; // Disable dual address mode
-    hi2c2.Init.OwnAddress2 = 0;                // Second address, not used here
+    hi2c2.Init.ClockSpeed = 100000;                       // Standard mode (100kHz)
+    hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;               // Duty cycle for standard mode
+    hi2c2.Init.OwnAddress1 = 0;                           // No specific own address
+    hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;  // Use 7-bit addressing
+    hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE; // Disable dual addressing mode
+    hi2c2.Init.OwnAddress2 = 0;                           // No second address
     hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE; // Disable general call
-    hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;     // Disable no-stretch mode
+    hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;     // Enable clock stretching
 
-    if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
-        // Initialization Error
+    if (HAL_I2C_Init(&hi2c2) != HAL_OK)
+    {
+        // If there is an initialization error, handle the error
         Error_Handler();
     }
 }
@@ -557,37 +570,53 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
   /* USER CODE END I2C1_MspDeInit 1 */
   }
 }
-void CalibrateGyro(void)
-{
+
+
+// Gyroscope Calibration Function
+void CalibrateGyro(MPU6886_Handle *handle, float *gyroBiasX, float *gyroBiasY, float *gyroBiasZ) {
     int32_t gyroX = 0, gyroY = 0, gyroZ = 0;
     uint16_t samples = 1000;  // Number of samples for averaging
+    uint8_t buffer[6];
 
-    // Inform the user to keep the device stationary
-    // You can flash an LED or send a message if you have an output mechanism
+    // Inform the user to keep the device stationary for accurate calibration
+    // You can indicate this through an LED or a display if available
 
-    for (uint16_t i = 0; i < samples; i++)
-    {
-        uint8_t buffer[6];
-        HAL_I2C_Mem_Read(&hi2c2, MPU6886_ADDRESS, MPU6886_GYRO_XOUT_H, 1, buffer, 6, HAL_MAX_DELAY);
+    for (uint16_t i = 0; i < samples; i++) {
+        // Read gyroscope data
+        HAL_StatusTypeDef status = HAL_I2C_Mem_Read(handle->i2cHandle, MPU6886_ADDRESS << 1, MPU6886_GYRO_XOUT_H, 1, buffer, 6, HAL_MAX_DELAY);
+        if (status != HAL_OK) {
+            // Handle read error (optional logging or LED indication)
+            return;
+        }
 
-        gyroX += (int16_t)(buffer[0] << 8 | buffer[1]);
-        gyroY += (int16_t)(buffer[2] << 8 | buffer[3]);
-        gyroZ += (int16_t)(buffer[4] << 8 | buffer[5]);
+        // Convert raw data
+        int16_t raw_gx = (int16_t)(buffer[0] << 8 | buffer[1]);
+        int16_t raw_gy = (int16_t)(buffer[2] << 8 | buffer[3]);
+        int16_t raw_gz = (int16_t)(buffer[4] << 8 | buffer[5]);
 
-        HAL_Delay(2); // Short delay between samples
+        // Accumulate values for averaging
+        gyroX += raw_gx;
+        gyroY += raw_gy;
+        gyroZ += raw_gz;
+
+        // Delay between samples for stability
+        HAL_Delay(2); // Adjust delay if needed for your specific hardware
     }
 
     // Calculate average bias
-    gyroBiasX = gyroX / (float)samples / 131.0f;  // 131.0f is the sensitivity scale factor for ±250°/s
-    gyroBiasY = gyroY / (float)samples / 131.0f;
-    gyroBiasZ = gyroZ / (float)samples / 131.0f;
+    *gyroBiasX = (gyroX / (float)samples) / MPU6886_GYRO_SCALE_250DPS;
+    *gyroBiasY = (gyroY / (float)samples) / MPU6886_GYRO_SCALE_250DPS;
+    *gyroBiasZ = (gyroZ / (float)samples) / MPU6886_GYRO_SCALE_250DPS;
+
+    // Gyro calibration complete. Store these bias values for use in correction during runtime.
 }
 
 
+// Function to update gyroscope bias if stationary
 void UpdateGyroBiasIfStationary(void)
 {
     float ax, ay, az;
-    MPU6886_ReadAccel(&ax, &ay, &az);
+    MPU6886_ReadAccelData(&imu6886, &ax, &ay, &az);
 
     float accelMagnitude = sqrtf(ax * ax + ay * ay + az * az);
 
@@ -595,9 +624,11 @@ void UpdateGyroBiasIfStationary(void)
     if (fabsf(accelMagnitude - 1.0f) < 0.05f)
     {
         // Update gyroscope bias
-        CalibrateGyro();
+        CalibrateGyro(&imu6886, &gyroBiasX, &gyroBiasY, &gyroBiasZ);
     }
 }
+
+
 
 // Error Handler
 void Error_Handler(void)
