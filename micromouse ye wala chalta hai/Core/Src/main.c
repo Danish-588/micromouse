@@ -29,6 +29,8 @@ VL53L0X_DEV    Dev = &vl53l0x_c;
 MPU6886_Handle imu6886;
 
 
+int old_vel1=0, old_vel2=0;
+
 float yaw = 0.0f;
 int gyro_calib = 0;
 int t1=0,t2=0;
@@ -257,13 +259,20 @@ int main(void)
         else if (yaw < 0.0f)
             yaw += 360.0f;
 
-
+        if(velocity1<0)
+        	old_vel1=velocity1;
+        if (velocity1>0)
+        	velocity1 = old_vel1;
+        if(velocity2>0)
+        	old_vel2=velocity2;
+        if (velocity2<0)
+        	velocity2 = old_vel2;
     	velocity1 = Encoder_GetVelocity(&htim1);
-    	current_rpm1 = 60* velocity1/cpr;
+    	current_rpm1 = 60* old_vel1/cpr;
 
         // Get encoder velocity
         velocity2 = Encoder_GetVelocity(&htim4); // Assuming velocity is in counts per minute
-    	current_rpm2 = 60* velocity2/cpr;
+    	current_rpm2 = 60* old_vel2/cpr;
 
 
     	// Corrected Code

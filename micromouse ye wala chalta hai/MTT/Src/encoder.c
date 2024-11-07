@@ -86,7 +86,7 @@ float Encoder_GetVelocity(TIM_HandleTypeDef *htim)
     old_value_enc=count_diff / time_diff;
     if (time_diff > 0)
     {
-		if(fabs(count_diff / time_diff)<15000)
+		if(fabs(count_diff)<1000)
 			return count_diff / time_diff;
 		else
 			return old_value_enc;
