@@ -75,19 +75,16 @@ void LED_Blink(void);
 void CalibrateGyro(void);
 void UpdateGyroBiasIfStationary(void);
 
-// Define counts per revolution for your encoder
-#define COUNTS_PER_REVOLUTION 1024  // Adjust this value based on your encoder specification
-
 // PID Control Variables for Motor 1
-float Kp1 = 1.0f;  // Proportional gain
+float Kp1 = 10.0f;  // Proportional gain
 float Ki1 = 0.0f;  // Integral gain
 float Kd1 = 0.05f; // Derivative gain
 float previous_error1 = 0.0f;
 float integral1 = 0.0f;
-int dir1 = 1;
+int dir1 = -1;
 
 // PID Control Variables for Motor 2
-float Kp2 = 1.0f;  // Proportional gain
+float Kp2 = 10.0f;  // Proportional gain
 float Ki2 = 0.0f;  // Integral gain
 float Kd2 = 0.05f; // Derivative gain
 float previous_error2 = 0.0f;
@@ -102,46 +99,61 @@ float target_rpm2 = 150.0f; // Desired velocity in RPM
 int current_rpm2=0;
 int cpr = 3000;
 
-// Update the PID_CalculatePWM1 function
 uint32_t PID_CalculatePWM1(float current_rpm1)
 {
     float error = target_rpm1 - current_rpm1;
-    integral1 += error;                       // Accumulate integral
-    float derivative = error - previous_error1; // Calculate derivative
-    previous_error1 = error;
+    float corr = (fabsf(error) / Kp1) + 1.0f; // Calculate correction
 
-    // PID formula
-    float output = (Kp1 * error) + (Ki1 * integral1) + (Kd1 * derivative);
+    if (error > 0)
+    {
+        // Need to increase PWM
+        pwm_value1 += (uint32_t)corr;
+    }
+    else if (error < 0)
+    {
+        // Need to decrease PWM
+        if (pwm_value1 > (uint32_t)corr)
+            pwm_value1 -= (uint32_t)corr;
+        else
+            pwm_value1 = 0;
+    }
+    // If error == 0, do nothing
 
-    // Clamp output to valid range 0-1024
-    if (output > 1024.0f) output = 1024.0f;
-    if (output < 0.0f) output = 0.0f;
-
-    pwm_value1 = (uint32_t)output;
+    // Clamp PWM to valid range
+    const uint32_t PWM_MAX = 1023;
+    if (pwm_value1 > PWM_MAX)
+        pwm_value1 = PWM_MAX;
 
     return pwm_value1;
 }
 
-// Update the PID_CalculatePWM2 function
 uint32_t PID_CalculatePWM2(float current_rpm2)
 {
     float error = target_rpm2 - current_rpm2;
-    integral2 += error;                       // Accumulate integral
-    float derivative = error - previous_error2; // Calculate derivative
-    previous_error2 = error;
+    float corr = (fabsf(error) / Kp2) + 1.0f; // Calculate correction
 
-    // PID formula
-    float output = (Kp2 * error) + (Ki2 * integral2) + (Kd2 * derivative);
+    if (error > 0)
+    {
+        // Need to increase PWM
+        pwm_value2 += (uint32_t)corr;
+    }
+    else if (error < 0)
+    {
+        // Need to decrease PWM
+        if (pwm_value2 > (uint32_t)corr)
+            pwm_value2 -= (uint32_t)corr;
+        else
+            pwm_value2 = 0;
+    }
+    // If error == 0, do nothing
 
-    // Clamp output to valid range 0-1024
-    if (output > 1024.0f) output = 1024.0f;
-    if (output < 0.0f) output = 0.0f;
-
-    pwm_value2 = (uint32_t)output;
+    // Clamp PWM to valid range
+    const uint32_t PWM_MAX = 1023;
+    if (pwm_value2 > PWM_MAX)
+        pwm_value2 = PWM_MAX;
 
     return pwm_value2;
 }
-
 
 int main(void)
 {

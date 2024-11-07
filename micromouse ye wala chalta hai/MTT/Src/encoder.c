@@ -6,7 +6,8 @@
  */
 #include "encoder.h"
 
-static uint16_t encoder_ppr = 0;
+static uint16_t encoder_ppr = 3000;
+float old_value_enc = 0;
 
 /**
  * @brief Initialize the specified timer for encoder mode with specified PPR.
@@ -62,6 +63,7 @@ int Encoder_GetCount(TIM_HandleTypeDef *htim)
  */
 float Encoder_GetVelocity(TIM_HandleTypeDef *htim)
 {
+
     static int last_count[2] = {0};       // Store previous count for each encoder
     static uint32_t last_time[2] = {0};   // Store previous time for each encoder
 
@@ -80,9 +82,17 @@ float Encoder_GetVelocity(TIM_HandleTypeDef *htim)
     last_count[encoder_index] = current_count;
     last_time[encoder_index] = current_time;
 
-    // Calculate and return velocity in counts per second
+
+    old_value_enc=count_diff / time_diff;
     if (time_diff > 0)
-        return count_diff / time_diff;
+    {
+		if(fabs(count_diff / time_diff)<15000)
+			return count_diff / time_diff;
+		else
+			return old_value_enc;
+    }
+
     else
         return 0.0f;
+
 }
