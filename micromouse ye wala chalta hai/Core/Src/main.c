@@ -6,6 +6,14 @@
 #include "encoder.h"
 #include "vl53l0x_api.h"
 
+enum
+{
+	rpm_corr,
+	angle_corr,
+	seedhe,
+	posi_corr,
+
+}correction_choice;
 
 I2C_HandleTypeDef hi2c2;
 
@@ -43,6 +51,9 @@ float Kp = 1.0;  // Proportional gain
 float Ki = 0.0;  // Integral gain
 float Kd = 0.05; // Derivative gain
 
+float target_yaw = 0.0f; // Target yaw angle (e.g., to maintain a straight path)
+uint32_t pwm_left = 0; // Initial PWM for left wheel
+uint32_t pwm_right = 0; // Initial PWM for right wheel
 float target_velocity = 1000; // Desired velocity in encoder counts per minute
 float previous_error = 0;
 float integral = 0;
@@ -81,7 +92,8 @@ void MX_I2C2_Init(void);
 void CalibrateGyro(MPU6886_Handle *handle, float *gyroBiasX, float *gyroBiasY, float *gyroBiasZ);
 void UpdateGyroBiasIfStationary(void);
 HAL_StatusTypeDef MPU6886_ReadGyroData(MPU6886_Handle *handle, float *gx_deg, float *gy_deg, float *gz_deg, float gyroBiasX, float gyroBiasY, float gyroBiasZ);
-
+void UpdateYaw(MPU6886_Handle *handle, float gyroBiasX, float gyroBiasY, float gyroBiasZ, float *roll, float *pitch, float *yaw);
+uint32_t PID_CalculateStraightWithYawCorrection(float current_rpm1, float current_rpm2, float current_yaw, float target_yaw, uint32_t *pwm_left, uint32_t *pwm_right);
 
 float sensorData[7]; // Adjust size based on your usage
 
@@ -108,26 +120,26 @@ int current_rpm1=0;
 float target_rpm2 = 150.0f; // Desired velocity in RPM
 int current_rpm2=0;
 int cpr = 3000;
-
 uint32_t PID_CalculatePWM1(float current_rpm1)
 {
     float error = target_rpm1 - current_rpm1;
-    float corr = (fabsf(error) / Kp1) + 1.0f; // Calculate correction
+    integral1 += error; // Accumulate integral
+    float derivative = error - previous_error1; // Calculate derivative
+    previous_error1 = error;
 
-    if (error > 0)
+    float corr = (Kp1 * error) + (Ki1 * integral1) + (Kd1 * derivative); // Full PID correction
+
+    if (corr > 0)
     {
-        // Need to increase PWM
         pwm_value1 += (uint32_t)corr;
     }
-    else if (error < 0)
+    else if (corr < 0)
     {
-        // Need to decrease PWM
-        if (pwm_value1 > (uint32_t)corr)
-            pwm_value1 -= (uint32_t)corr;
+        if (pwm_value1 > (uint32_t)fabsf(corr))
+            pwm_value1 -= (uint32_t)fabsf(corr);
         else
             pwm_value1 = 0;
     }
-    // If error == 0, do nothing
 
     // Clamp PWM to valid range
     const uint32_t PWM_MAX = 1023;
@@ -140,22 +152,23 @@ uint32_t PID_CalculatePWM1(float current_rpm1)
 uint32_t PID_CalculatePWM2(float current_rpm2)
 {
     float error = target_rpm2 - current_rpm2;
-    float corr = (fabsf(error) / Kp2) + 1.0f; // Calculate correction
+    integral2 += error; // Accumulate integral
+    float derivative = error - previous_error2; // Calculate derivative
+    previous_error2 = error;
 
-    if (error > 0)
+    float corr = (Kp2 * error) + (Ki2 * integral2) + (Kd2 * derivative); // Full PID correction
+
+    if (corr > 0)
     {
-        // Need to increase PWM
         pwm_value2 += (uint32_t)corr;
     }
-    else if (error < 0)
+    else if (corr < 0)
     {
-        // Need to decrease PWM
-        if (pwm_value2 > (uint32_t)corr)
-            pwm_value2 -= (uint32_t)corr;
+        if (pwm_value2 > (uint32_t)fabsf(corr))
+            pwm_value2 -= (uint32_t)fabsf(corr);
         else
             pwm_value2 = 0;
     }
-    // If error == 0, do nothing
 
     // Clamp PWM to valid range
     const uint32_t PWM_MAX = 1023;
@@ -164,6 +177,112 @@ uint32_t PID_CalculatePWM2(float current_rpm2)
 
     return pwm_value2;
 }
+
+uint32_t PID_CalculateYawPWM(float current_yaw, float target_yaw, uint32_t *pwm_left, uint32_t *pwm_right)
+{
+    float yaw_error = target_yaw - current_yaw; // Calculate yaw error
+    static float yaw_integral = 0.0f;
+    static float previous_yaw_error = 0.0f;
+    float yaw_Kp = 1.0f; // Proportional gain for yaw control, adjust as needed
+    float yaw_Kd = 0.05f; // Derivative gain for yaw control
+    float yaw_Ki = 0.01f; // Integral gain for yaw control
+
+    yaw_integral += yaw_error; // Accumulate integral
+    float yaw_derivative = yaw_error - previous_yaw_error; // Calculate derivative
+    previous_yaw_error = yaw_error;
+
+    // Calculate correction using PID
+    float correction = (yaw_Kp * yaw_error) + (yaw_Ki * yaw_integral) + (yaw_Kd * yaw_derivative);
+
+    if (yaw_error > 0)
+    {
+        *pwm_left += (uint32_t)fabsf(correction);
+        if (*pwm_right > (uint32_t)fabsf(correction))
+            *pwm_right -= (uint32_t)fabsf(correction);
+        else
+            *pwm_right = 0;
+    }
+    else if (yaw_error < 0)
+    {
+        *pwm_right += (uint32_t)fabsf(correction);
+        if (*pwm_left > (uint32_t)fabsf(correction))
+            *pwm_left -= (uint32_t)fabsf(correction);
+        else
+            *pwm_left = 0;
+    }
+
+    // Clamp PWM to valid range
+    const uint32_t PWM_MAX = 1023;
+    if (*pwm_left > PWM_MAX) *pwm_left = PWM_MAX;
+    if (*pwm_right > PWM_MAX) *pwm_right = PWM_MAX;
+
+    return 0; // Return value can be modified to indicate status if needed
+}
+
+uint32_t PID_CalculateStraightWithYawCorrection(float current_rpm1, float current_rpm2, float current_yaw, float target_yaw, uint32_t *pwm_left, uint32_t *pwm_right)
+{
+    // PID for speed control (straight motion)
+    float speed_error1 = target_rpm1 - current_rpm1;
+    float speed_error2 = target_rpm2 - current_rpm2;
+
+    integral1 += speed_error1; // Accumulate integral for left wheel
+    integral2 += speed_error2; // Accumulate integral for right wheel
+
+    float derivative1 = speed_error1 - previous_error1; // Derivative for left wheel
+    float derivative2 = speed_error2 - previous_error2; // Derivative for right wheel
+
+    previous_error1 = speed_error1;
+    previous_error2 = speed_error2;
+
+    // Calculate PID corrections for speed
+    float corr1 = (Kp1 * speed_error1) + (Ki1 * integral1) + (Kd1 * derivative1);
+    float corr2 = (Kp2 * speed_error2) + (Ki2 * integral2) + (Kd2 * derivative2);
+
+    // PID for angle correction
+    float yaw_error = target_yaw - current_yaw;
+    static float yaw_integral = 0.0f;
+    static float previous_yaw_error = 0.0f;
+    float yaw_Kp = 1.0f; // Adjust as needed
+    float yaw_Kd = 0.05f; // Adjust as needed
+    float yaw_Ki = 0.01f; // Adjust as needed
+
+    yaw_integral += yaw_error; // Accumulate integral for yaw
+    float yaw_derivative = yaw_error - previous_yaw_error; // Derivative for yaw
+    previous_yaw_error = yaw_error;
+
+    // Calculate yaw correction using PID
+    float yaw_correction = (yaw_Kp * yaw_error) + (yaw_Ki * yaw_integral) + (yaw_Kd * yaw_derivative);
+
+    // Adjust PWM based on speed corrections and yaw correction
+    if (yaw_error > 0) {
+        // Yaw correction to turn right (increase left speed, decrease right speed)
+        *pwm_left += (uint32_t)(corr1 + fabsf(yaw_correction));
+        if (*pwm_right > (uint32_t)(corr2 + fabsf(yaw_correction)))
+            *pwm_right -= (uint32_t)(corr2 + fabsf(yaw_correction));
+        else
+            *pwm_right = 0;
+    } else if (yaw_error < 0) {
+        // Yaw correction to turn left (increase right speed, decrease left speed)
+        *pwm_right += (uint32_t)(corr2 + fabsf(yaw_correction));
+        if (*pwm_left > (uint32_t)(corr1 + fabsf(yaw_correction)))
+            *pwm_left -= (uint32_t)(corr1 + fabsf(yaw_correction));
+        else
+            *pwm_left = 0;
+    } else {
+        // Maintain straight motion with speed corrections
+        *pwm_left += (uint32_t)corr1;
+        *pwm_right += (uint32_t)corr2;
+    }
+
+    // Clamp PWM values to valid range
+    const uint32_t PWM_MAX = 1023;
+    if (*pwm_left > PWM_MAX) *pwm_left = PWM_MAX;
+    if (*pwm_right > PWM_MAX) *pwm_right = PWM_MAX;
+
+    return 0; // Return status if needed
+}
+
+
 
 int main(void)
 {
@@ -268,35 +387,46 @@ int main(void)
         if (velocity2<0)
         	velocity2 = old_vel2;
     	velocity1 = Encoder_GetVelocity(&htim1);
-    	current_rpm1 = 60* old_vel1/cpr;
-
-        // Get encoder velocity
         velocity2 = Encoder_GetVelocity(&htim4); // Assuming velocity is in counts per minute
+
+    	current_rpm1 = 60* old_vel1/cpr;
     	current_rpm2 = 60* old_vel2/cpr;
 
+    	switch (correction_choice)
+    	{
+			case rpm_corr:
+			{
+				pwm_left = PID_CalculatePWM1(current_rpm1*dir1);
+				pwm_right = PID_CalculatePWM2(current_rpm2*dir2);
+			}
+			break;
 
-    	// Corrected Code
-    	uint32_t pwm_value1 = PID_CalculatePWM1(current_rpm1*dir1);
-    	uint32_t pwm_value2 = PID_CalculatePWM2(current_rpm2*dir2);
+			case angle_corr:
+			{
+				PID_CalculateYawPWM(yaw, target_yaw, &pwm_left, &pwm_right);
+			}
+			break;
+
+			case seedhe:
+			{
+				PID_CalculateStraightWithYawCorrection(current_rpm1, current_rpm2, yaw, target_yaw, &pwm_left, &pwm_right);
+			}
+			break;
+
+			case posi_corr:
+			{
+
+			}
+			break;
+    	}
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwm_left);
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwm_right);
 
 
-        // Update duty cycle with the new PID-calculated value
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwm_value1);
-
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwm_value2);
-
-        // Optional: Add debugging information, toggle LED, etc.
         LED_Blink();
 
   	  VL53L0X_PerformSingleRangingMeasurement(Dev, &RangingData);
 
-  	  if(RangingData.RangeStatus == 0)
-  	  {
-  		  MessageLen = sprintf((char*)Message, "Measured distance: %i\n\r", RangingData.RangeMilliMeter);
-//  		  HAL_UART_Transmit(&huart2, Message, MessageLen, 100);
-  	  }
-
-        // Delay to sample periodically
         HAL_Delay(10); // Adjust delay as needed
     }
 }
@@ -308,14 +438,14 @@ void LED_Blink(void)
     HAL_Delay(500); // Delay for 500 ms (adjust as necessary for blink rate)
 }
 
-// Function for updating yaw using a complementary filter with 6 DOF
 void UpdateYaw(MPU6886_Handle *handle, float gyroBiasX, float gyroBiasY, float gyroBiasZ, float *roll, float *pitch, float *yaw) {
     float ax, ay, az;
     float gx, gy, gz;
     static float filteredYaw = 0.0;
     static float filteredRoll = 0.0;
     static float filteredPitch = 0.0;
-    float dt = 0.01; // Loop time step in seconds (adjust to actual loop timing)
+    static float yawDriftCorrection = 0.0; // Used for long-term drift correction
+    float dt = 0.01; // Adjust to actual loop timing, or measure dynamically
 
     // Read sensor data
     MPU6886_ReadAccelData(handle, &ax, &ay, &az);
@@ -329,23 +459,39 @@ void UpdateYaw(MPU6886_Handle *handle, float gyroBiasX, float gyroBiasY, float g
     // Integrate gyroscope rates to get angles
     filteredRoll += gyroRollRate * dt;
     filteredPitch += gyroPitchRate * dt;
-    filteredYaw += gyroYawRate * dt;
+    filteredYaw += (gyroYawRate * dt) - yawDriftCorrection;
 
     // Calculate roll and pitch from the accelerometer
     float accelRoll = atan2f(ay, sqrtf(ax * ax + az * az)) * (180.0 / M_PI);
     float accelPitch = atan2f(-ax, sqrtf(ay * ay + az * az)) * (180.0 / M_PI);
 
     // Complementary filter to combine accelerometer and gyroscope data
-    filteredRoll = (0.98 * filteredRoll) + (0.02 * accelRoll);
-    filteredPitch = (0.98 * filteredPitch) + (0.02 * accelPitch);
+    float alpha = 0.95; // Tune as needed (0.95 gives more weight to gyroscope, 0.05 to accelerometer)
+    filteredRoll = (alpha * filteredRoll) + ((1 - alpha) * accelRoll);
+    filteredPitch = (alpha * filteredPitch) + ((1 - alpha) * accelPitch);
 
-    // Yaw correction (optional, as accelerometer is less effective for yaw)
+    // Simple drift correction logic for yaw
+    static uint32_t stationaryCount = 0;
+    if (fabsf(ax) < 0.05 && fabsf(ay) < 0.05 && fabsf(az - 1.0) < 0.05) {
+        // Assume the IMU is stationary; increment count
+        stationaryCount++;
+        if (stationaryCount > 1000) { // Adjust duration as needed (e.g., 10 seconds)
+            yawDriftCorrection += filteredYaw / stationaryCount;
+            stationaryCount = 0; // Reset after correction
+        }
+    } else {
+        stationaryCount = 0; // Reset count when IMU moves
+    }
+
+    // Yaw correction (yaw drift management)
+    if (stationaryCount == 0) {
+        filteredYaw -= yawDriftCorrection; // Apply drift correction during movement
+    }
+
+    // Assign values to output pointers
     *yaw = filteredYaw;
     *roll = filteredRoll;
     *pitch = filteredPitch;
-
-    // Print or store the results as needed
-    // printf("Roll: %.2f, Pitch: %.2f, Yaw: %.2f\n", *roll, *pitch, *yaw);
 }
 
 
@@ -625,7 +771,7 @@ void CalibrateGyro(MPU6886_Handle *handle, float *gyroBiasX, float *gyroBiasY, f
     int32_t gyroXSum = 0, gyroYSum = 0, gyroZSum = 0;
     uint32_t sampleCount = 0;
     uint32_t startTime = HAL_GetTick();
-    uint32_t calibrationDuration = 30000; // 10 seconds in milliseconds
+    uint32_t calibrationDuration = 10000; // 10 seconds in milliseconds
 
     // Keep collecting data for 10 seconds
     while ((HAL_GetTick() - startTime) < calibrationDuration) {
