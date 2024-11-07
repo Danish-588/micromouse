@@ -31,7 +31,7 @@ MPU6886_Handle imu6886;
 
 int old_vel1=0, old_vel2=0;
 
-float yaw = 0.0f;
+float roll = 0.0, pitch = 0.0, yaw = 0.0;
 int gyro_calib = 0;
 int t1=0,t2=0;
 // Global variables for gyroscope bias
@@ -80,6 +80,7 @@ void MX_I2C2_Init(void);
 
 void CalibrateGyro(MPU6886_Handle *handle, float *gyroBiasX, float *gyroBiasY, float *gyroBiasZ);
 void UpdateGyroBiasIfStationary(void);
+HAL_StatusTypeDef MPU6886_ReadGyroData(MPU6886_Handle *handle, float *gx_deg, float *gy_deg, float *gz_deg, float gyroBiasX, float gyroBiasY, float gyroBiasZ);
 
 
 float sensorData[7]; // Adjust size based on your usage
@@ -252,8 +253,7 @@ int main(void)
 
         // Integrate gyroscope Z-axis data to calculate yaw
         yaw += sensorData[5] * deltaTime; // sensorData[5] is corrected gyroZ
-
-        // Normalize yaw to 0-360 degrees
+        UpdateYaw(&imu6886, gyroBiasX, gyroBiasY, gyroBiasZ, &roll, &pitch, &yaw);        // Normalize yaw to 0-360 degrees
         if (yaw >= 360.0f)
             yaw -= 360.0f;
         else if (yaw < 0.0f)
@@ -308,7 +308,46 @@ void LED_Blink(void)
     HAL_Delay(500); // Delay for 500 ms (adjust as necessary for blink rate)
 }
 
-// Initialize I2C1
+// Function for updating yaw using a complementary filter with 6 DOF
+void UpdateYaw(MPU6886_Handle *handle, float gyroBiasX, float gyroBiasY, float gyroBiasZ, float *roll, float *pitch, float *yaw) {
+    float ax, ay, az;
+    float gx, gy, gz;
+    static float filteredYaw = 0.0;
+    static float filteredRoll = 0.0;
+    static float filteredPitch = 0.0;
+    float dt = 0.01; // Loop time step in seconds (adjust to actual loop timing)
+
+    // Read sensor data
+    MPU6886_ReadAccelData(handle, &ax, &ay, &az);
+    MPU6886_ReadGyroData(handle, &gx, &gy, &gz, gyroBiasX, gyroBiasY, gyroBiasZ);
+
+    // Convert gyroscope data to degrees per second
+    float gyroRollRate = gx;  // Roll rate from gyroscope (degrees/s)
+    float gyroPitchRate = gy; // Pitch rate from gyroscope (degrees/s)
+    float gyroYawRate = gz;   // Yaw rate from gyroscope (degrees/s)
+
+    // Integrate gyroscope rates to get angles
+    filteredRoll += gyroRollRate * dt;
+    filteredPitch += gyroPitchRate * dt;
+    filteredYaw += gyroYawRate * dt;
+
+    // Calculate roll and pitch from the accelerometer
+    float accelRoll = atan2f(ay, sqrtf(ax * ax + az * az)) * (180.0 / M_PI);
+    float accelPitch = atan2f(-ax, sqrtf(ay * ay + az * az)) * (180.0 / M_PI);
+
+    // Complementary filter to combine accelerometer and gyroscope data
+    filteredRoll = (0.98 * filteredRoll) + (0.02 * accelRoll);
+    filteredPitch = (0.98 * filteredPitch) + (0.02 * accelPitch);
+
+    // Yaw correction (optional, as accelerometer is less effective for yaw)
+    *yaw = filteredYaw;
+    *roll = filteredRoll;
+    *pitch = filteredPitch;
+
+    // Print or store the results as needed
+    // printf("Roll: %.2f, Pitch: %.2f, Yaw: %.2f\n", *roll, *pitch, *yaw);
+}
+
 
 // Initialize TIM1 for encoder
 void MX_TIM1_Init(void)
@@ -581,44 +620,36 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
 }
 
 
-// Gyroscope Calibration Function
+// Function to calibrate gyroscope bias by averaging readings over 10 seconds
 void CalibrateGyro(MPU6886_Handle *handle, float *gyroBiasX, float *gyroBiasY, float *gyroBiasZ) {
-    int32_t gyroX = 0, gyroY = 0, gyroZ = 0;
-    uint16_t samples = 1000;  // Number of samples for averaging
-    uint8_t buffer[6];
+    int32_t gyroXSum = 0, gyroYSum = 0, gyroZSum = 0;
+    uint32_t sampleCount = 0;
+    uint32_t startTime = HAL_GetTick();
+    uint32_t calibrationDuration = 30000; // 10 seconds in milliseconds
 
-    // Inform the user to keep the device stationary for accurate calibration
-    // You can indicate this through an LED or a display if available
+    // Keep collecting data for 10 seconds
+    while ((HAL_GetTick() - startTime) < calibrationDuration) {
+        float gx, gy, gz;
+        MPU6886_ReadGyroData(&imu6886, &sensorData[3], &sensorData[4], &sensorData[5],0,0,0);
 
-    for (uint16_t i = 0; i < samples; i++) {
-        // Read gyroscope data
-        HAL_StatusTypeDef status = HAL_I2C_Mem_Read(handle->i2cHandle, MPU6886_ADDRESS << 1, MPU6886_GYRO_XOUT_H, 1, buffer, 6, HAL_MAX_DELAY);
-        if (status != HAL_OK) {
-            // Handle read error (optional logging or LED indication)
-            return;
-        }
+        // Sum up the raw gyro data for averaging
+        gyroXSum += gx;
+        gyroYSum += gy;
+        gyroZSum += gz;
+        sampleCount++;
 
-        // Convert raw data
-        int16_t raw_gx = (int16_t)(buffer[0] << 8 | buffer[1]);
-        int16_t raw_gy = (int16_t)(buffer[2] << 8 | buffer[3]);
-        int16_t raw_gz = (int16_t)(buffer[4] << 8 | buffer[5]);
-
-        // Accumulate values for averaging
-        gyroX += raw_gx;
-        gyroY += raw_gy;
-        gyroZ += raw_gz;
-
-        // Delay between samples for stability
-        HAL_Delay(2); // Adjust delay if needed for your specific hardware
+        HAL_Delay(10); // Delay between samples to prevent overwhelming the I2C bus
     }
 
-    // Calculate average bias
-    *gyroBiasX = (gyroX / (float)samples) / MPU6886_GYRO_SCALE_250DPS;
-    *gyroBiasY = (gyroY / (float)samples) / MPU6886_GYRO_SCALE_250DPS;
-    *gyroBiasZ = (gyroZ / (float)samples) / MPU6886_GYRO_SCALE_250DPS;
+    // Calculate the average bias
+    *gyroBiasX = gyroXSum / (float)sampleCount;
+    *gyroBiasY = gyroYSum / (float)sampleCount;
+    *gyroBiasZ = gyroZSum / (float)sampleCount;
 
-    // Gyro calibration complete. Store these bias values for use in correction during runtime.
+    // Print or log calibration results if needed
+    // printf("Gyro Bias - X: %.2f, Y: %.2f, Z: %.2f\n", *gyroBiasX, *gyroBiasY, *gyroBiasZ);
 }
+
 
 
 // Function to update gyroscope bias if stationary
