@@ -23,7 +23,8 @@ I2C_HandleTypeDef hi2c1;
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2; // For PWM generation on TIM2
 TIM_HandleTypeDef htim4; // For encoder on TIM4
-
+UART_HandleTypeDef huart2; // Assuming using USART2 now
+uint8_t rx_buff2;
 
 uint8_t Message[64];
 uint8_t MessageLen;
@@ -36,6 +37,7 @@ VL53L0X_DEV    Dev = &vl53l0x_c;
 // IMU handle
 MPU6886_Handle imu6886;
 
+long delay_counter = 0;
 
 int old_vel1=0, old_vel2=0;
 
@@ -120,6 +122,8 @@ int current_rpm1=0;
 float target_rpm2 = 150.0f; // Desired velocity in RPM
 int current_rpm2=0;
 int cpr = 3000;
+
+
 uint32_t PID_CalculatePWM1(float current_rpm1)
 {
     float error = target_rpm1 - current_rpm1;
@@ -283,6 +287,82 @@ uint32_t PID_CalculateStraightWithYawCorrection(float current_rpm1, float curren
 }
 
 
+// Function to initialize UART2 and enable interrupt
+void uart_init(UART_HandleTypeDef *huart, uint32_t baudrate, void (*isr_callback)(void)) {
+    huart->Instance = USART2;  // Use USART2 instead of USART4
+    huart->Init.BaudRate = baudrate;
+    huart->Init.WordLength = UART_WORDLENGTH_8B;
+    huart->Init.StopBits = UART_STOPBITS_1;
+    huart->Init.Parity = UART_PARITY_NONE;
+    huart->Init.Mode = UART_MODE_RX;
+    huart->Init.HwFlowCtl = UART_HWCONTROL_NONE;
+    huart->Init.OverSampling = UART_OVERSAMPLING_16;
+
+    HAL_UART_Init(huart);
+
+    // Enable UART interrupt
+    HAL_NVIC_EnableIRQ(USART2_IRQn); // Use USART2 IRQ instead of USART4 IRQ
+}
+
+void empty(void){}
+
+// Interrupt Service Routine (ISR) for UART
+void arduimu_isr(void) {
+    uint8_t temp_data = (uint8_t)(huart2.Instance->DR); // Read received byte
+
+    // Check if the high bit is set (0x80)
+    if (temp_data & 0x80) {
+        // This is the first byte
+        temp_angle = (temp_data & 0x7F) << 7;  // Shift the lower 7 bits to the left
+        next_byte = 1;  // Expect the next byte
+    } else if (next_byte) {
+        // This is the second byte, combine with previous byte
+        combined_angle = temp_angle | temp_data;  // Combine the angle value
+        next_byte = 0;  // Reset flag
+        raw_angle = 360.0 - (combined_angle / 10.0); // Convert to angle (assuming 1/10 degree precision)
+    }
+}
+
+// Polling function for UART data (if not using interrupts)
+void arduimu_poll(void) {
+    // Receive 1 byte from UART2
+    HAL_UART_Receive(&huart2, &rx_buff2, 1, 5);  // Timeout 5 ms
+
+    uint8_t temp_data = rx_buff2 & 0xFF;  // Extract the byte
+
+    if (temp_data & 0x80) {
+        // First byte, shift the value
+        temp_angle = (temp_data & 0x7F) << 7;
+        next_byte = 1;  // Expect the next byte
+    } else if (next_byte) {
+        // Second byte, combine with the previous byte
+        combined_angle = temp_angle | temp_data;
+        next_byte = 0;
+        raw_angle = 360.0 - (combined_angle / 10.0);  // Calculate the angle
+    } else {
+        next_byte = 0;  // Reset in case of an invalid byte
+    }
+}
+
+// Initialization function to setup the IMU
+void arduimu_init(void) {
+    // Initialize variables
+    temp_angle = 0;
+    next_byte = 0;
+    combined_angle = 0;
+
+    // Initialize UART2 and the ISR callback function
+    uart_init(&huart2, 38400, empty);
+}
+
+// USART2 IRQ handler
+void USART2_IRQHandler(void) {
+    // Call the ISR function to handle UART data
+    arduimu_isr();
+}
+
+
+
 
 int main(void)
 {
@@ -302,18 +382,18 @@ int main(void)
     MX_TIM1_Init();
     MX_TIM2_Init();
     MX_TIM4_Init();
-    MX_I2C1_Init();
-    MX_I2C2_Init();
+
+//    MX_I2C1_Init();
+//    MX_I2C2_Init();
+    HAL_Init();
 //    MX_I2C1_Init();
 
     Encoder_Init(&htim1, 3);
     Encoder_Init(&htim4, 3);
 
-    MessageLen = sprintf((char*)Message, "msalamon.pl VL53L0X test\n\r");
-//    HAL_UART_Transmit(&huart2, Message, MessageLen, 100);
+    arduimu_init();
 
-    Dev->I2cHandle = &hi2c1;
-    Dev->I2cDevAddr = 0x52;
+
 
 //    HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_RESET); // Disable XSHUT
     HAL_Delay(20);
@@ -338,12 +418,6 @@ int main(void)
      VL53L0X_SetVcselPulsePeriod(Dev, VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14);
      /* USER CODE END 2 */
 
-//    // Initialize MPU6886 (IMU)
-    imu6886.i2cHandle = &hi2c2;
-    init_status = MPU6886_Init(&imu6886);
-
-    CalibrateGyro(&imu6886, &gyroBiasX, &gyroBiasY, &gyroBiasZ);
-    prevTime = HAL_GetTick();
 
     // Start PWM on TIM2, Channel 2
     if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2) != HAL_OK) {
@@ -357,27 +431,6 @@ int main(void)
 
     while (1)
     {
-
-    	if (gyro_calib && !(gyro_calib=0))
-    	    CalibrateGyro(&imu6886, &gyroBiasX, &gyroBiasY, &gyroBiasZ);
-        // Read sensor data
-        MPU6886_ReadAccelData(&imu6886, &sensorData[0], &sensorData[1], &sensorData[2]);
-        MPU6886_ReadGyroData(&imu6886, &sensorData[3], &sensorData[4], &sensorData[5], gyroBiasX, gyroBiasY, gyroBiasZ);
-        MPU6886_ReadTempData(&imu6886, &sensorData[6]);
-
-        // Calculate time difference in seconds
-        uint32_t currentTime = HAL_GetTick();
-        float deltaTime = (currentTime - prevTime) / 1000.0f; // Convert ms to s
-        prevTime = currentTime;
-
-        // Integrate gyroscope Z-axis data to calculate yaw
-        yaw += sensorData[5] * deltaTime; // sensorData[5] is corrected gyroZ
-        UpdateYaw(&imu6886, gyroBiasX, gyroBiasY, gyroBiasZ, &roll, &pitch, &yaw);        // Normalize yaw to 0-360 degrees
-        if (yaw >= 360.0f)
-            yaw -= 360.0f;
-        else if (yaw < 0.0f)
-            yaw += 360.0f;
-
         if(velocity1<0)
         	old_vel1=velocity1;
         if (velocity1>0)
@@ -423,11 +476,17 @@ int main(void)
 		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwm_right);
 
 
-        LED_Blink();
+	    if(delay_counter%500 == 0)  // Assuming 10 iterations for your required delay
+	    {
+	        LED_Blink();
+	    }
+	    if(delay_counter%10 == 0)  // Assuming 10 iterations for your required delay
+	    {
+	        VL53L0X_PerformSingleRangingMeasurement(Dev, &RangingData);
+	    }
+	    delay_counter++;
+	    arduimu_poll();
 
-  	  VL53L0X_PerformSingleRangingMeasurement(Dev, &RangingData);
-
-        HAL_Delay(10); // Adjust delay as needed
     }
 }
 
@@ -435,7 +494,6 @@ int main(void)
 void LED_Blink(void)
 {
     HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13); // Toggle the LED state
-    HAL_Delay(500); // Delay for 500 ms (adjust as necessary for blink rate)
 }
 
 void UpdateYaw(MPU6886_Handle *handle, float gyroBiasX, float gyroBiasY, float gyroBiasZ, float *roll, float *pitch, float *yaw) {

@@ -47,7 +47,7 @@ volatile int checksum_received;
 //ArduIMU
 volatile int temp_angle;
 volatile bool next_byte;
-volatile int combined_angle;
-volatile int raw_angle;
+volatile float combined_angle;
+volatile float raw_angle;
 
 #endif /* INC_IMU_H_ */
