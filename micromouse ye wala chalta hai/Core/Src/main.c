@@ -24,6 +24,7 @@ TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2; // For PWM generation on TIM2
 TIM_HandleTypeDef htim4; // For encoder on TIM4
 UART_HandleTypeDef huart2; // Assuming using USART2 now
+TIM_HandleTypeDef htim10;
 uint8_t rx_buff2;
 
 uint8_t Message[64];
@@ -38,6 +39,8 @@ VL53L0X_DEV    Dev = &vl53l0x_c;
 MPU6886_Handle imu6886;
 
 long delay_counter = 0;
+volatile int retard  = 0;
+
 
 int old_vel1=0, old_vel2=0;
 
@@ -362,6 +365,63 @@ void USART2_IRQHandler(void) {
 }
 
 
+void ControlLoop()
+{
+	retard++;
+}
+
+void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM10) // Check if the interrupt is from TIM10
+    {
+        // Call your function here
+        ControlLoop();
+    }
+}
+
+static void MX_TIM10_Init(void)
+{
+
+  /* USER CODE BEGIN TIM10_Init 0 */
+
+  /* USER CODE END TIM10_Init 0 */
+
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM10_Init 1 */
+
+  /* USER CODE END TIM10_Init 1 */
+  htim10.Instance = TIM10;
+  htim10.Init.Prescaler = 127;
+  htim10.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim10.Init.Period = 999;
+  htim10.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim10.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim10) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_OC_Init(&htim10) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_TIMING;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_OC_ConfigChannel(&htim10, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM10_Init 2 */
+
+  /* USER CODE END TIM10_Init 2 */
+  HAL_TIM_MspPostInit(&htim10);
+
+}
+
+
+
 
 
 int main(void)
@@ -382,6 +442,9 @@ int main(void)
     MX_TIM1_Init();
     MX_TIM2_Init();
     MX_TIM4_Init();
+    MX_TIM10_Init();
+    HAL_TIM_OC_Start_IT(&htim10, TIM_CHANNEL_1);
+
 
 //    MX_I2C1_Init();
 //    MX_I2C2_Init();
