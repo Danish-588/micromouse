@@ -6,6 +6,10 @@
 #include "encoder.h"
 #include "vl53l0x_api.h"
 
+/* /----------------------------------------------------------\
+   |                         VARIABLES                        |
+   \----------------------------------------------------------/ */
+
 // ENUM DEFINITIONS
 enum
 {
@@ -100,13 +104,18 @@ float sensorData[7]; // Adjust size as needed
 // CPR VALUE
 int cpr = 3000;
 
-// FUNCTION PROTOTYPES
+/* /----------------------------------------------------------\
+   |                  FUNCTION PROTOTYPES                     |
+   \----------------------------------------------------------/ */
+
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MPU6886_Scan(void);
 static void MX_TIM1_Init(void); // TIM1 for PWM generation
 static void MX_TIM2_Init(void); // TIM2 for PWM generation
 static void MX_TIM4_Init(void); // TIM4 for encoder
+static void MX_TIM10_Init(void); //TIM10 for control loop
+
 void ControlLoop();
 void MX_I2C2_Init(void);
 void LED_Blink(void);
@@ -118,12 +127,9 @@ HAL_StatusTypeDef MPU6886_ReadGyroData(MPU6886_Handle *handle, float *gx_deg, fl
 void UpdateYaw(MPU6886_Handle *handle, float gyroBiasX, float gyroBiasY, float gyroBiasZ, float *roll, float *pitch, float *yaw);
 uint32_t PID_CalculateStraightWithYawCorrection(float current_rpm1, float current_rpm2, float current_yaw, float target_yaw, uint32_t *pwm_left, uint32_t *pwm_right);
 
-
-//----------------------------------------------------------
-//----------------------------------------------------------
-//----------------------------------------------------------
-
-//--------------------------PWM-GEN-------------------------
+/* /----------------------------------------------------------\
+   |                       PWM-GEN                            |
+   \----------------------------------------------------------/ */
 
 uint32_t PID_CalculatePWM1(float current_rpm1)
 {
@@ -287,8 +293,9 @@ uint32_t PID_CalculateStraightWithYawCorrection(float current_rpm1, float curren
     return 0; // Return status if needed
 }
 
-
-//---------------------------ARDUIMU------------------------
+/* /----------------------------------------------------------\
+   |                       ARDUIMU                            |
+   \----------------------------------------------------------/ */
 
 // Initialization function to setup the IMU
 void arduimu_init(void) {
@@ -324,12 +331,13 @@ void arduimu_poll(void) {
     }
 }
 
+/* /----------------------------------------------------------\
+   |                         GENERAL                          |
+   \----------------------------------------------------------/ */
 
-
-// Function to toggle LED on C13
 void LED_Blink(void)
 {
-    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13); // Toggle the LED state
+    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13); // Toggle the LED on C13
 }
 
 
@@ -345,13 +353,13 @@ void uart_init(UART_HandleTypeDef *huart, uint32_t baudrate, void (*isr_callback
     huart->Init.OverSampling = UART_OVERSAMPLING_16;
 
     HAL_UART_Init(huart);
-
     // Enable UART interrupt
     HAL_NVIC_EnableIRQ(USART2_IRQn); // Use USART2 IRQ instead of USART4 IRQ
 }
 
-
-//------------------------M5-STACK-IMU------------------------
+/* /----------------------------------------------------------\
+   |                     M5-STACK-IMU                        |
+   \----------------------------------------------------------/ */
 
 void UpdateYaw(MPU6886_Handle *handle, float gyroBiasX, float gyroBiasY, float gyroBiasZ, float *roll, float *pitch, float *yaw) {
     float ax, ay, az;
@@ -468,8 +476,9 @@ void UpdateGyroBiasIfStationary(void)
     }
 }
 
-
-//------------------------HAL-PERIPHERALS--------------------
+/* /----------------------------------------------------------\
+   |                      HAL FUNCTIONS                       |
+   \----------------------------------------------------------/ */
 
 // USART2 IRQ handler
 void USART2_IRQHandler(void) {
@@ -485,48 +494,6 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
         ControlLoop();
     }
 }
-
-static void MX_TIM10_Init(void)
-{
-
-  /* USER CODE BEGIN TIM10_Init 0 */
-
-  /* USER CODE END TIM10_Init 0 */
-
-  TIM_OC_InitTypeDef sConfigOC = {0};
-
-  /* USER CODE BEGIN TIM10_Init 1 */
-
-  /* USER CODE END TIM10_Init 1 */
-  htim10.Instance = TIM10;
-  htim10.Init.Prescaler = 127;
-  htim10.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim10.Init.Period = 999;
-  htim10.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim10.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim10) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_OC_Init(&htim10) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfigOC.OCMode = TIM_OCMODE_TIMING;
-  sConfigOC.Pulse = 0;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_OC_ConfigChannel(&htim10, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM10_Init 2 */
-
-  /* USER CODE END TIM10_Init 2 */
-  HAL_TIM_MspPostInit(&htim10);
-
-}
-
 
 // GPIO Initialization
 static void MX_GPIO_Init(void)
@@ -586,6 +553,7 @@ static void MX_GPIO_Init(void)
 }
 
 // Initialize I2C2
+
 void MX_I2C2_Init(void)
 {
     hi2c2.Instance = I2C2;
@@ -786,11 +754,50 @@ void MX_TIM4_Init(void)
     HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
 }
 
+void MX_TIM10_Init(void)
+{
 
+  /* USER CODE BEGIN TIM10_Init 0 */
 
-//----------------------------------------------------------
-//----------------------------------------------------------
+  /* USER CODE END TIM10_Init 0 */
 
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM10_Init 1 */
+
+  /* USER CODE END TIM10_Init 1 */
+  htim10.Instance = TIM10;
+  htim10.Init.Prescaler = 127;
+  htim10.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim10.Init.Period = 999;
+  htim10.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim10.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim10) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_OC_Init(&htim10) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_TIMING;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_OC_ConfigChannel(&htim10, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM10_Init 2 */
+
+  /* USER CODE END TIM10_Init 2 */
+  HAL_TIM_MspPostInit(&htim10);
+
+}
+
+/* /----------------------------------------------------------\
+   |                 CONTROL LOOP AND MAIN                    |
+   \----------------------------------------------------------/ */
 
 void ControlLoop()
 {
