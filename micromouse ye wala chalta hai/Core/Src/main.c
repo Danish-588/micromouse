@@ -107,8 +107,11 @@ static void MPU6886_Scan(void);
 static void MX_TIM1_Init(void); // TIM1 for PWM generation
 static void MX_TIM2_Init(void); // TIM2 for PWM generation
 static void MX_TIM4_Init(void); // TIM4 for encoder
-void LED_Blink(void);
+void ControlLoop();
 void MX_I2C2_Init(void);
+void LED_Blink(void);
+void empty(void);
+void uart_init(UART_HandleTypeDef *huart, uint32_t baudrate, void (*isr_callback)(void));
 void CalibrateGyro(MPU6886_Handle *handle, float *gyroBiasX, float *gyroBiasY, float *gyroBiasZ);
 void UpdateGyroBiasIfStationary(void);
 HAL_StatusTypeDef MPU6886_ReadGyroData(MPU6886_Handle *handle, float *gx_deg, float *gy_deg, float *gz_deg, float gyroBiasX, float gyroBiasY, float gyroBiasZ);
@@ -429,13 +432,12 @@ void CalibrateGyro(MPU6886_Handle *handle, float *gyroBiasX, float *gyroBiasY, f
 
     // Keep collecting data for 10 seconds
     while ((HAL_GetTick() - startTime) < calibrationDuration) {
-        float gx, gy, gz;
         MPU6886_ReadGyroData(&imu6886, &sensorData[3], &sensorData[4], &sensorData[5],0,0,0);
 
         // Sum up the raw gyro data for averaging
-        gyroXSum += gx;
-        gyroYSum += gy;
-        gyroZSum += gz;
+        gyroXSum += sensorData[3];
+        gyroYSum += sensorData[4];
+        gyroZSum += sensorData[5];
         sampleCount++;
 
         HAL_Delay(10); // Delay between samples to prevent overwhelming the I2C bus
@@ -472,7 +474,7 @@ void UpdateGyroBiasIfStationary(void)
 // USART2 IRQ handler
 void USART2_IRQHandler(void) {
     // Call the ISR function to handle UART data
-    arduimu_isr();
+    empty();
 }
 
 void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
