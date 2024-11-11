@@ -118,10 +118,10 @@ int main(void)
   Dev->I2cHandle = &hi2c1;
   Dev->I2cDevAddr = 0x52;
 
-  HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_RESET); // Disable XSHUT
-  HAL_Delay(20);
-  HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_SET); // Enable XSHUT
-  HAL_Delay(20);
+//  HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_RESET); // Disable XSHUT
+//  HAL_Delay(20);
+//  HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_SET); // Enable XSHUT
+//  HAL_Delay(20);
 
   //
   // VL53L0X init for Single Measurement
