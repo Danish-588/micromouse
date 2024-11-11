@@ -415,135 +415,122 @@ void ControlLoop()
 	retard++;
 }
 
-
 int main(void)
 {
-
-
+    // Variables for VL53L0X calibration and setup
     uint32_t refSpadCount;
     uint8_t isApertureSpads;
     uint8_t VhvSettings;
     uint8_t PhaseCal;
 
-
+    // Initialize HAL and system clock
     HAL_Init();
     SystemClock_Config();
 
-    // Initialize all configured peripherals
+    // Initialize peripherals
     MX_GPIO_Init();
     MX_TIM1_Init();
     MX_TIM2_Init();
     MX_TIM4_Init();
     MX_TIM10_Init();
+
+    // Start Timer interrupt for TIM10
     HAL_TIM_OC_Start_IT(&htim10, TIM_CHANNEL_1);
 
-
-//    MX_I2C1_Init();
-//    MX_I2C2_Init();
-    HAL_Init();
-//    MX_I2C1_Init();
-
+    // Initialize encoders
     Encoder_Init(&htim1, 3);
     Encoder_Init(&htim4, 3);
 
+    // Initialize IMU and UART communication
     arduimu_init();
 
+	// Delay for sensor stabilization
+	// HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_RESET); // Disable XSHUT
+	// HAL_Delay(20);
+	// HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_SET); // Enable XSHUT
+	// HAL_Delay(20);
 
+    // Initialize VL53L0X sensor
+    VL53L0X_WaitDeviceBooted(Dev);
+    VL53L0X_DataInit(Dev);
+    VL53L0X_StaticInit(Dev);
+    VL53L0X_PerformRefCalibration(Dev, &VhvSettings, &PhaseCal);
+    VL53L0X_PerformRefSpadManagement(Dev, &refSpadCount, &isApertureSpads);
+    VL53L0X_SetDeviceMode(Dev, VL53L0X_DEVICEMODE_SINGLE_RANGING);
 
-//    HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_RESET); // Disable XSHUT
-    HAL_Delay(20);
-//    HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_SET); // Enable XSHUT
-    HAL_Delay(20);
+    // Set VL53L0X sensor limits and timing budget
+    VL53L0X_SetLimitCheckEnable(Dev, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, 1);
+    VL53L0X_SetLimitCheckEnable(Dev, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, 1);
+    VL53L0X_SetLimitCheckValue(Dev, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, (FixPoint1616_t)(0.1 * 65536));
+    VL53L0X_SetLimitCheckValue(Dev, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, (FixPoint1616_t)(60 * 65536));
+    VL53L0X_SetMeasurementTimingBudgetMicroSeconds(Dev, 33000);
+    VL53L0X_SetVcselPulsePeriod(Dev, VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18);
+    VL53L0X_SetVcselPulsePeriod(Dev, VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14);
 
-
-    VL53L0X_WaitDeviceBooted( Dev );
-     VL53L0X_DataInit( Dev );
-     VL53L0X_StaticInit( Dev );
-     VL53L0X_PerformRefCalibration(Dev, &VhvSettings, &PhaseCal);
-     VL53L0X_PerformRefSpadManagement(Dev, &refSpadCount, &isApertureSpads);
-     VL53L0X_SetDeviceMode(Dev, VL53L0X_DEVICEMODE_SINGLE_RANGING);
-
-     // Enable/Disable Sigma and Signal check
-     VL53L0X_SetLimitCheckEnable(Dev, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, 1);
-     VL53L0X_SetLimitCheckEnable(Dev, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, 1);
-     VL53L0X_SetLimitCheckValue(Dev, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, (FixPoint1616_t)(0.1*65536));
-     VL53L0X_SetLimitCheckValue(Dev, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, (FixPoint1616_t)(60*65536));
-     VL53L0X_SetMeasurementTimingBudgetMicroSeconds(Dev, 33000);
-     VL53L0X_SetVcselPulsePeriod(Dev, VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18);
-     VL53L0X_SetVcselPulsePeriod(Dev, VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14);
-     /* USER CODE END 2 */
-
-
-    // Start PWM on TIM2, Channel 2
+    // Start PWM on TIM2 channels
     if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2) != HAL_OK) {
-        // Handle error (e.g., light up an error LED)
         Error_Handler();
     }
     if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1) != HAL_OK) {
-        // Handle error (e.g., light up an error LED)
         Error_Handler();
     }
 
+    // Main loop
     while (1)
     {
-        if(velocity1<0)
-        	old_vel1=velocity1;
-        if (velocity1>0)
-        	velocity1 = old_vel1;
-        if(velocity2>0)
-        	old_vel2=velocity2;
-        if (velocity2<0)
-        	velocity2 = old_vel2;
-    	velocity1 = Encoder_GetVelocity(&htim1);
-        velocity2 = Encoder_GetVelocity(&htim4); // Assuming velocity is in counts per minute
+        // Velocity calculation and update
+        if (velocity1 < 0) old_vel1 = velocity1;
+        if (velocity1 > 0) velocity1 = old_vel1;
+        if (velocity2 > 0) old_vel2 = velocity2;
+        if (velocity2 < 0) velocity2 = old_vel2;
 
-    	current_rpm1 = 60* old_vel1/cpr;
-    	current_rpm2 = 60* old_vel2/cpr;
+        velocity1 = Encoder_GetVelocity(&htim1);
+        velocity2 = Encoder_GetVelocity(&htim4);
 
-    	switch (correction_choice)
-    	{
-			case rpm_corr:
-			{
-				pwm_left = PID_CalculatePWM1(current_rpm1*dir1);
-				pwm_right = PID_CalculatePWM2(current_rpm2*dir2);
-			}
-			break;
+        current_rpm1 = (60 * old_vel1) / cpr;
+        current_rpm2 = (60 * old_vel2) / cpr;
 
-			case angle_corr:
-			{
-				PID_CalculateYawPWM(yaw, target_yaw, &pwm_left, &pwm_right);
-			}
-			break;
+        // Control logic based on correction choice
+        switch (correction_choice)
+        {
+            case rpm_corr:
+                pwm_left = PID_CalculatePWM1(current_rpm1 * dir1);
+                pwm_right = PID_CalculatePWM2(current_rpm2 * dir2);
+                break;
 
-			case seedhe:
-			{
-				PID_CalculateStraightWithYawCorrection(current_rpm1, current_rpm2, yaw, target_yaw, &pwm_left, &pwm_right);
-			}
-			break;
+            case angle_corr:
+                PID_CalculateYawPWM(yaw, target_yaw, &pwm_left, &pwm_right);
+                break;
 
-			case posi_corr:
-			{
+            case seedhe:
+                PID_CalculateStraightWithYawCorrection(current_rpm1, current_rpm2, yaw, target_yaw, &pwm_left, &pwm_right);
+                break;
 
-			}
-			break;
-    	}
-		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwm_left);
-		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwm_right);
+            case posi_corr:
+                // Position correction logic can be implemented here
+                break;
+        }
 
+        // Update PWM values for motor control
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwm_left);
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwm_right);
 
-	    if(delay_counter%500 == 0)  // Assuming 10 iterations for your required delay
-	    {
-	        LED_Blink();
-	    }
-	    if(delay_counter%10 == 0)  // Assuming 10 iterations for your required delay
-	    {
-	        VL53L0X_PerformSingleRangingMeasurement(Dev, &RangingData);
-	    }
-	    delay_counter++;
-	    arduimu_poll();
+        // LED blinking for status indication
+        if (delay_counter % 500 == 0) {
+            LED_Blink();
+        }
 
+        // Perform ranging measurement at regular intervals
+        if (delay_counter % 10 == 0) {
+            VL53L0X_PerformSingleRangingMeasurement(Dev, &RangingData);
+        }
+
+        // Increment delay counter and poll for IMU data
+        delay_counter++;
+        arduimu_poll();
     }
 }
+
 
 // Function to toggle LED on C13
 void LED_Blink(void)
