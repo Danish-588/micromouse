@@ -32,10 +32,42 @@ TIM_HandleTypeDef htim10; // Additional timer, if needed
 // UART HANDLE
 UART_HandleTypeDef huart2; // Using USART2
 
-// SENSOR STRUCTURES AND VARIABLES
-VL53L0X_RangingMeasurementData_t RangingData;
-VL53L0X_Dev_t vl53l0x_c; // Center module
-VL53L0X_DEV Dev = &vl53l0x_c;
+// VL53L0X VARIABLES
+// List of new I2C addresses for sensors (shifted left by 1 for 8-bit addressing)
+#define SENSOR1_NEW_ADDR 0x54 // 0x2A shifted left by 1
+#define SENSOR2_NEW_ADDR 0x56 // 0x2B shifted left by 1
+#define SENSOR3_NEW_ADDR 0x58 // 0x2C shifted left by 1
+#define SENSOR4_NEW_ADDR 0x5A // 0x2D shifted left by 1
+#define TOF1_XSHUT_Pin GPIO_PIN_0
+#define TOF1_XSHUT_GPIO_Port GPIOB
+#define TOF2_XSHUT_Pin GPIO_PIN_1
+#define TOF2_XSHUT_GPIO_Port GPIOB
+#define TOF3_XSHUT_Pin GPIO_PIN_2
+#define TOF3_XSHUT_GPIO_Port GPIOB
+#define TOF4_XSHUT_Pin GPIO_PIN_12
+#define TOF4_XSHUT_GPIO_Port GPIOB
+VL53L0X_Dev_t vl53l0x_s1; // Sensor 1
+VL53L0X_Dev_t vl53l0x_s2; // Sensor 2
+VL53L0X_Dev_t vl53l0x_s3; // Sensor 3
+VL53L0X_Dev_t vl53l0x_s4; // Sensor 4
+VL53L0X_DEV Dev1 = &vl53l0x_s1;
+VL53L0X_DEV Dev2 = &vl53l0x_s2;
+VL53L0X_DEV Dev3 = &vl53l0x_s3;
+VL53L0X_DEV Dev4 = &vl53l0x_s4;
+VL53L0X_RangingMeasurementData_t RangingData1;
+VL53L0X_RangingMeasurementData_t RangingData2;
+VL53L0X_RangingMeasurementData_t RangingData3;
+VL53L0X_RangingMeasurementData_t RangingData4;
+// Array of devices and XSHUT pins
+uint16_t NewAddresses[4] = {SENSOR1_NEW_ADDR, SENSOR2_NEW_ADDR, SENSOR3_NEW_ADDR, SENSOR4_NEW_ADDR};
+GPIO_TypeDef* XSHUT_Ports[4] = {TOF1_XSHUT_GPIO_Port, TOF2_XSHUT_GPIO_Port, TOF3_XSHUT_GPIO_Port, TOF4_XSHUT_GPIO_Port};
+uint16_t XSHUT_Pins[4] = {TOF1_XSHUT_Pin, TOF2_XSHUT_Pin, TOF3_XSHUT_Pin, TOF4_XSHUT_Pin};
+// Variables for VL53L0X calibration and setup
+uint32_t refSpadCount;
+uint8_t isApertureSpads;
+uint8_t VhvSettings;
+uint8_t PhaseCal;
+
 MPU6886_Handle imu6886;
 
 // GLOBAL VARIABLES FOR DATA AND STATUS
@@ -89,7 +121,10 @@ uint32_t pwm_left = 0;  // Initial PWM for left wheel
 uint32_t pwm_right = 0; // Initial PWM for right wheel
 
 // DISTANCE VARIABLES
-uint16_t distance = 0; // Distance variable for VL53L1X sensor
+uint16_t distance1 = 0; // Distance variable for VL53L1X sensor
+uint16_t distance2 = 0; // Distance variable for VL53L1X sensor
+uint16_t distance3 = 0; // Distance variable for VL53L1X sensor
+uint16_t distance4 = 0; // Distance variable for VL53L1X sensor
 
 // PWM DEBUG PARAMETERS
 uint32_t pwm_frequency = 1000; // 1 kHz default frequency
@@ -498,13 +533,14 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
 // GPIO Initialization
 static void MX_GPIO_Init(void)
 {
+    // Enable GPIO Clocks
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_GPIOB_CLK_ENABLE();
     __HAL_RCC_GPIOC_CLK_ENABLE();
 
     GPIO_InitTypeDef GPIO_InitStruct = {0};
 
-    // Configure GPIO pins B6 and B7 for TIM4 encoder input
+    /* Configure GPIO pins B6 and B7 for TIM4 encoder input */
     GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
@@ -512,7 +548,7 @@ static void MX_GPIO_Init(void)
     GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-    // Configure GPIO pins A8 and A9 for TIM1 encoder input
+    /* Configure GPIO pins A8 and A9 for TIM1 encoder input */
     GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
@@ -520,7 +556,7 @@ static void MX_GPIO_Init(void)
     GPIO_InitStruct.Alternate = GPIO_AF1_TIM1;
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-    // Configure GPIO pin PA0 for TIM2 Channel 1 (PWM output)
+    /* Configure GPIO pin PA0 for TIM2 Channel 1 (PWM output) */
     GPIO_InitStruct.Pin = GPIO_PIN_0;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
@@ -528,29 +564,48 @@ static void MX_GPIO_Init(void)
     GPIO_InitStruct.Alternate = GPIO_AF1_TIM2;
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-    // Configure GPIO pin A1 for TIM2 Channel 2 (PWM output)
+    /* Configure GPIO pin PA1 for TIM2 Channel 2 (PWM output) */
     GPIO_InitStruct.Pin = GPIO_PIN_1;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    GPIO_InitStruct.Alternate = GPIO_AF1_TIM2;
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-    // Configure GPIO pin C13 for LED output
+    /* Configure GPIO pin PC13 for LED output */
     GPIO_InitStruct.Pin = GPIO_PIN_13;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-    // Configure GPIO pins PB3 and PB10 for I2C2 with pull-up
+    /* Configure GPIO pins PB3 and PB10 for I2C2 with pull-up */
     GPIO_InitStruct.Pin = GPIO_PIN_3 | GPIO_PIN_10;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
-    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Pull = GPIO_PULLUP; // Enable pull-up resistors
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF4_I2C2;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    /* Configure GPIO pins for XSHUT (open-drain outputs) */
+    GPIO_InitStruct.Pin = TOF1_XSHUT_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD; // Open-drain output
+    GPIO_InitStruct.Pull = GPIO_NOPULL;         // No pull-up or pull-down resistors
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(TOF1_XSHUT_GPIO_Port, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = TOF2_XSHUT_Pin;
+    HAL_GPIO_Init(TOF2_XSHUT_GPIO_Port, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = TOF3_XSHUT_Pin;
+    HAL_GPIO_Init(TOF3_XSHUT_GPIO_Port, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = TOF4_XSHUT_Pin;
+    HAL_GPIO_Init(TOF4_XSHUT_GPIO_Port, &GPIO_InitStruct);
+
+    /* Set all XSHUT pins low to reset sensors */
+    HAL_GPIO_WritePin(TOF1_XSHUT_GPIO_Port, TOF1_XSHUT_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(TOF2_XSHUT_GPIO_Port, TOF2_XSHUT_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(TOF3_XSHUT_GPIO_Port, TOF3_XSHUT_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(TOF4_XSHUT_GPIO_Port, TOF4_XSHUT_Pin, GPIO_PIN_RESET);
 }
+
 
 // Initialize I2C2
 
@@ -806,11 +861,8 @@ void ControlLoop()
 
 int main(void)
 {
-    // Variables for VL53L0X calibration and setup
-    uint32_t refSpadCount;
-    uint8_t isApertureSpads;
-    uint8_t VhvSettings;
-    uint8_t PhaseCal;
+    VL53L0X_DEV DevArray[4] = {Dev1, Dev2, Dev3, Dev4};
+
 
     // Initialize HAL and system clock
     HAL_Init();
@@ -822,6 +874,7 @@ int main(void)
     MX_TIM2_Init();
     MX_TIM4_Init();
     MX_TIM10_Init();
+    MX_I2C2_Init(); // Ensure I2C2 is initialized for VL53L0X sensors
 
     // Start Timer interrupt for TIM10
     HAL_TIM_OC_Start_IT(&htim10, TIM_CHANNEL_1);
@@ -833,28 +886,48 @@ int main(void)
     // Initialize IMU and UART communication
     arduimu_init();
 
-	// Delay for sensor stabilization
-	// HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_RESET); // Disable XSHUT
-	// HAL_Delay(20);
-	// HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_SET); // Enable XSHUT
-	// HAL_Delay(20);
+    // Reset all sensors by setting XSHUT low
+    HAL_GPIO_WritePin(TOF1_XSHUT_GPIO_Port, TOF1_XSHUT_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(TOF2_XSHUT_GPIO_Port, TOF2_XSHUT_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(TOF3_XSHUT_GPIO_Port, TOF3_XSHUT_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(TOF4_XSHUT_GPIO_Port, TOF4_XSHUT_Pin, GPIO_PIN_RESET);
+    HAL_Delay(10);
 
-    // Initialize VL53L0X sensor
-    VL53L0X_WaitDeviceBooted(Dev);
-    VL53L0X_DataInit(Dev);
-    VL53L0X_StaticInit(Dev);
-    VL53L0X_PerformRefCalibration(Dev, &VhvSettings, &PhaseCal);
-    VL53L0X_PerformRefSpadManagement(Dev, &refSpadCount, &isApertureSpads);
-    VL53L0X_SetDeviceMode(Dev, VL53L0X_DEVICEMODE_SINGLE_RANGING);
+    // Initialize each sensor
+    for (int i = 0; i < 4; i++)
+    {
+        // Bring the sensor out of reset
+        HAL_GPIO_WritePin(XSHUT_Ports[i], XSHUT_Pins[i], GPIO_PIN_SET);
+        HAL_Delay(10);
 
-    // Set VL53L0X sensor limits and timing budget
-    VL53L0X_SetLimitCheckEnable(Dev, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, 1);
-    VL53L0X_SetLimitCheckEnable(Dev, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, 1);
-    VL53L0X_SetLimitCheckValue(Dev, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, (FixPoint1616_t)(0.1 * 65536));
-    VL53L0X_SetLimitCheckValue(Dev, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, (FixPoint1616_t)(60 * 65536));
-    VL53L0X_SetMeasurementTimingBudgetMicroSeconds(Dev, 33000);
-    VL53L0X_SetVcselPulsePeriod(Dev, VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18);
-    VL53L0X_SetVcselPulsePeriod(Dev, VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14);
+        // Initialize the sensor
+        DevArray[i]->I2cHandle = &hi2c2;
+        DevArray[i]->I2cDevAddr = 0x52; // Default address (0x29 shifted left by 1)
+
+        VL53L0X_WaitDeviceBooted(DevArray[i]);
+        VL53L0X_DataInit(DevArray[i]);
+        VL53L0X_StaticInit(DevArray[i]);
+
+        // Change I2C address to a unique one
+        VL53L0X_SetDeviceAddress(DevArray[i], NewAddresses[i] >> 1); // Pass 7-bit address
+        DevArray[i]->I2cDevAddr = NewAddresses[i];
+
+        // Perform reference calibration and SPAD management
+        VL53L0X_PerformRefCalibration(DevArray[i], &VhvSettings, &PhaseCal);
+        VL53L0X_PerformRefSpadManagement(DevArray[i], &refSpadCount, &isApertureSpads);
+
+        // Set device mode and configure sensor
+        VL53L0X_SetDeviceMode(DevArray[i], VL53L0X_DEVICEMODE_SINGLE_RANGING);
+
+        // Set VL53L0X sensor limits and timing budget
+        VL53L0X_SetLimitCheckEnable(DevArray[i], VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, 1);
+        VL53L0X_SetLimitCheckEnable(DevArray[i], VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, 1);
+        VL53L0X_SetLimitCheckValue(DevArray[i], VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, (FixPoint1616_t)(0.1 * 65536));
+        VL53L0X_SetLimitCheckValue(DevArray[i], VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, (FixPoint1616_t)(60 * 65536));
+        VL53L0X_SetMeasurementTimingBudgetMicroSeconds(DevArray[i], 33000);
+        VL53L0X_SetVcselPulsePeriod(DevArray[i], VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18);
+        VL53L0X_SetVcselPulsePeriod(DevArray[i], VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14);
+    }
 
     // Start PWM on TIM2 channels
     if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2) != HAL_OK) {
@@ -911,7 +984,21 @@ int main(void)
 
         // Perform ranging measurement at regular intervals
         if (delay_counter % 10 == 0) {
-            VL53L0X_PerformSingleRangingMeasurement(Dev, &RangingData);
+            // Read data from all VL53L0X sensors
+            VL53L0X_PerformSingleRangingMeasurement(Dev1, &RangingData1);
+            distance1 = RangingData1.RangeMilliMeter;
+
+            VL53L0X_PerformSingleRangingMeasurement(Dev2, &RangingData2);
+            distance2 = RangingData2.RangeMilliMeter;
+
+            VL53L0X_PerformSingleRangingMeasurement(Dev3, &RangingData3);
+            distance3 = RangingData3.RangeMilliMeter;
+
+            VL53L0X_PerformSingleRangingMeasurement(Dev4, &RangingData4);
+            distance4 = RangingData4.RangeMilliMeter;
+
+            // Use the distance values as needed
+            // For example, you can store them in an array or process them accordingly
         }
 
         // Increment delay counter and poll for IMU data
@@ -919,6 +1006,7 @@ int main(void)
         arduimu_poll();
     }
 }
+
 
 // Error Handler
 void Error_Handler(void)
