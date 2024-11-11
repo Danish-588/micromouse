@@ -61,6 +61,7 @@ float Kd1 = 0.05f; // Derivative gain
 float previous_error1 = 0.0f;
 float integral1 = 0.0f;
 uint32_t pwm_value1 = 0;
+float velocity1 = 0;
 float target_rpm1 = 150.0f; // Desired velocity in RPM
 
 // PID CONTROL VARIABLES FOR MOTOR 2
@@ -70,6 +71,7 @@ float Kd2 = 0.05f; // Derivative gain
 float previous_error2 = 0.0f;
 float integral2 = 0.0f;
 uint32_t pwm_value2 = 0;
+float velocity2 = 0;
 float target_rpm2 = 150.0f; // Desired velocity in RPM
 
 // YAW CORRECTION VARIABLES
@@ -102,8 +104,8 @@ int cpr = 3000;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MPU6886_Scan(void);
-static void MX_TIM2_Init(void); // TIM2 for PWM generation
 static void MX_TIM1_Init(void); // TIM1 for PWM generation
+static void MX_TIM2_Init(void); // TIM2 for PWM generation
 static void MX_TIM4_Init(void); // TIM4 for encoder
 void LED_Blink(void);
 void MX_I2C2_Init(void);
@@ -403,132 +405,6 @@ static void MX_TIM10_Init(void)
   /* USER CODE END TIM10_Init 2 */
   HAL_TIM_MspPostInit(&htim10);
 
-}
-
-
-//----------------------------------------------------------
-//----------------------------------------------------------
-
-
-void ControlLoop()
-{
-	retard++;
-}
-
-int main(void)
-{
-    // Variables for VL53L0X calibration and setup
-    uint32_t refSpadCount;
-    uint8_t isApertureSpads;
-    uint8_t VhvSettings;
-    uint8_t PhaseCal;
-
-    // Initialize HAL and system clock
-    HAL_Init();
-    SystemClock_Config();
-
-    // Initialize peripherals
-    MX_GPIO_Init();
-    MX_TIM1_Init();
-    MX_TIM2_Init();
-    MX_TIM4_Init();
-    MX_TIM10_Init();
-
-    // Start Timer interrupt for TIM10
-    HAL_TIM_OC_Start_IT(&htim10, TIM_CHANNEL_1);
-
-    // Initialize encoders
-    Encoder_Init(&htim1, 3);
-    Encoder_Init(&htim4, 3);
-
-    // Initialize IMU and UART communication
-    arduimu_init();
-
-	// Delay for sensor stabilization
-	// HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_RESET); // Disable XSHUT
-	// HAL_Delay(20);
-	// HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_SET); // Enable XSHUT
-	// HAL_Delay(20);
-
-    // Initialize VL53L0X sensor
-    VL53L0X_WaitDeviceBooted(Dev);
-    VL53L0X_DataInit(Dev);
-    VL53L0X_StaticInit(Dev);
-    VL53L0X_PerformRefCalibration(Dev, &VhvSettings, &PhaseCal);
-    VL53L0X_PerformRefSpadManagement(Dev, &refSpadCount, &isApertureSpads);
-    VL53L0X_SetDeviceMode(Dev, VL53L0X_DEVICEMODE_SINGLE_RANGING);
-
-    // Set VL53L0X sensor limits and timing budget
-    VL53L0X_SetLimitCheckEnable(Dev, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, 1);
-    VL53L0X_SetLimitCheckEnable(Dev, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, 1);
-    VL53L0X_SetLimitCheckValue(Dev, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, (FixPoint1616_t)(0.1 * 65536));
-    VL53L0X_SetLimitCheckValue(Dev, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, (FixPoint1616_t)(60 * 65536));
-    VL53L0X_SetMeasurementTimingBudgetMicroSeconds(Dev, 33000);
-    VL53L0X_SetVcselPulsePeriod(Dev, VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18);
-    VL53L0X_SetVcselPulsePeriod(Dev, VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14);
-
-    // Start PWM on TIM2 channels
-    if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2) != HAL_OK) {
-        Error_Handler();
-    }
-    if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1) != HAL_OK) {
-        Error_Handler();
-    }
-
-    // Main loop
-    while (1)
-    {
-        // Velocity calculation and update
-        if (velocity1 < 0) old_vel1 = velocity1;
-        if (velocity1 > 0) velocity1 = old_vel1;
-        if (velocity2 > 0) old_vel2 = velocity2;
-        if (velocity2 < 0) velocity2 = old_vel2;
-
-        velocity1 = Encoder_GetVelocity(&htim1);
-        velocity2 = Encoder_GetVelocity(&htim4);
-
-        current_rpm1 = (60 * old_vel1) / cpr;
-        current_rpm2 = (60 * old_vel2) / cpr;
-
-        // Control logic based on correction choice
-        switch (correction_choice)
-        {
-            case rpm_corr:
-                pwm_left = PID_CalculatePWM1(current_rpm1 * dir1);
-                pwm_right = PID_CalculatePWM2(current_rpm2 * dir2);
-                break;
-
-            case angle_corr:
-                PID_CalculateYawPWM(yaw, target_yaw, &pwm_left, &pwm_right);
-                break;
-
-            case seedhe:
-                PID_CalculateStraightWithYawCorrection(current_rpm1, current_rpm2, yaw, target_yaw, &pwm_left, &pwm_right);
-                break;
-
-            case posi_corr:
-                // Position correction logic can be implemented here
-                break;
-        }
-
-        // Update PWM values for motor control
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwm_left);
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwm_right);
-
-        // LED blinking for status indication
-        if (delay_counter % 500 == 0) {
-            LED_Blink();
-        }
-
-        // Perform ranging measurement at regular intervals
-        if (delay_counter % 10 == 0) {
-            VL53L0X_PerformSingleRangingMeasurement(Dev, &RangingData);
-        }
-
-        // Increment delay counter and poll for IMU data
-        delay_counter++;
-        arduimu_poll();
-    }
 }
 
 
@@ -836,7 +712,6 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
 }
 
 
-
 void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
 {
 
@@ -896,8 +771,6 @@ void CalibrateGyro(MPU6886_Handle *handle, float *gyroBiasX, float *gyroBiasY, f
     // printf("Gyro Bias - X: %.2f, Y: %.2f, Z: %.2f\n", *gyroBiasX, *gyroBiasY, *gyroBiasZ);
 }
 
-
-
 // Function to update gyroscope bias if stationary
 void UpdateGyroBiasIfStationary(void)
 {
@@ -916,12 +789,137 @@ void UpdateGyroBiasIfStationary(void)
 
 
 
+//----------------------------------------------------------
+//----------------------------------------------------------
+
+
+void ControlLoop()
+{
+	retard++;
+}
+
+int main(void)
+{
+    // Variables for VL53L0X calibration and setup
+    uint32_t refSpadCount;
+    uint8_t isApertureSpads;
+    uint8_t VhvSettings;
+    uint8_t PhaseCal;
+
+    // Initialize HAL and system clock
+    HAL_Init();
+    SystemClock_Config();
+
+    // Initialize peripherals
+    MX_GPIO_Init();
+    MX_TIM1_Init();
+    MX_TIM2_Init();
+    MX_TIM4_Init();
+    MX_TIM10_Init();
+
+    // Start Timer interrupt for TIM10
+    HAL_TIM_OC_Start_IT(&htim10, TIM_CHANNEL_1);
+
+    // Initialize encoders
+    Encoder_Init(&htim1, 3);
+    Encoder_Init(&htim4, 3);
+
+    // Initialize IMU and UART communication
+    arduimu_init();
+
+	// Delay for sensor stabilization
+	// HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_RESET); // Disable XSHUT
+	// HAL_Delay(20);
+	// HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_SET); // Enable XSHUT
+	// HAL_Delay(20);
+
+    // Initialize VL53L0X sensor
+    VL53L0X_WaitDeviceBooted(Dev);
+    VL53L0X_DataInit(Dev);
+    VL53L0X_StaticInit(Dev);
+    VL53L0X_PerformRefCalibration(Dev, &VhvSettings, &PhaseCal);
+    VL53L0X_PerformRefSpadManagement(Dev, &refSpadCount, &isApertureSpads);
+    VL53L0X_SetDeviceMode(Dev, VL53L0X_DEVICEMODE_SINGLE_RANGING);
+
+    // Set VL53L0X sensor limits and timing budget
+    VL53L0X_SetLimitCheckEnable(Dev, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, 1);
+    VL53L0X_SetLimitCheckEnable(Dev, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, 1);
+    VL53L0X_SetLimitCheckValue(Dev, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, (FixPoint1616_t)(0.1 * 65536));
+    VL53L0X_SetLimitCheckValue(Dev, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, (FixPoint1616_t)(60 * 65536));
+    VL53L0X_SetMeasurementTimingBudgetMicroSeconds(Dev, 33000);
+    VL53L0X_SetVcselPulsePeriod(Dev, VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18);
+    VL53L0X_SetVcselPulsePeriod(Dev, VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14);
+
+    // Start PWM on TIM2 channels
+    if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2) != HAL_OK) {
+        Error_Handler();
+    }
+    if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1) != HAL_OK) {
+        Error_Handler();
+    }
+
+    // Main loop
+    while (1)
+    {
+        // Velocity calculation and update
+        if (velocity1 < 0) old_vel1 = velocity1;
+        if (velocity1 > 0) velocity1 = old_vel1;
+        if (velocity2 > 0) old_vel2 = velocity2;
+        if (velocity2 < 0) velocity2 = old_vel2;
+
+        velocity1 = Encoder_GetVelocity(&htim1);
+        velocity2 = Encoder_GetVelocity(&htim4);
+
+        current_rpm1 = (60 * old_vel1) / cpr;
+        current_rpm2 = (60 * old_vel2) / cpr;
+
+        // Control logic based on correction choice
+        switch (correction_choice)
+        {
+            case rpm_corr:
+                pwm_left = PID_CalculatePWM1(current_rpm1 * dir1);
+                pwm_right = PID_CalculatePWM2(current_rpm2 * dir2);
+                break;
+
+            case angle_corr:
+                PID_CalculateYawPWM(yaw, target_yaw, &pwm_left, &pwm_right);
+                break;
+
+            case seedhe:
+                PID_CalculateStraightWithYawCorrection(current_rpm1, current_rpm2, yaw, target_yaw, &pwm_left, &pwm_right);
+                break;
+
+            case posi_corr:
+                // Position correction logic can be implemented here
+                break;
+        }
+
+        // Update PWM values for motor control
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwm_left);
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwm_right);
+
+        // LED blinking for status indication
+        if (delay_counter % 500 == 0) {
+            LED_Blink();
+        }
+
+        // Perform ranging measurement at regular intervals
+        if (delay_counter % 10 == 0) {
+            VL53L0X_PerformSingleRangingMeasurement(Dev, &RangingData);
+        }
+
+        // Increment delay counter and poll for IMU data
+        delay_counter++;
+        arduimu_poll();
+    }
+}
+
 // Error Handler
 void Error_Handler(void)
 {
     while (1)
     {
-        // Implement error handling here
+        // Ideally a blink sequence to indicate an error
     }
 }
 
