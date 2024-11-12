@@ -72,12 +72,6 @@ volatile int count = 0;
 uint32_t pwm_frequency = 1000;  // 1 kHz default frequency
 uint32_t duty_cycle = 69;       // 69% default duty cycle
 
-// Status Tracking Variables
-HAL_StatusTypeDef acc_status = HAL_OK;
-HAL_StatusTypeDef gyro_status = HAL_OK;
-HAL_StatusTypeDef temp_status = HAL_OK;
-HAL_StatusTypeDef init_status = HAL_OK;
-
 // VL53L0X Variables
 VL53L0X_RangingMeasurementData_t RangingData;
 VL53L0X_Dev_t vl53l0x_c; // Center module
@@ -147,15 +141,8 @@ void LED_Blink(void);
 
 // UART Functions
 void arduimu_init(void);
-void arduimu_isr(void);
 void arduimu_poll(void);
 void uart_init(UART_HandleTypeDef *huart, uint32_t baudrate, void (*isr_callback)(void));
-
-// Gyroscope Functions
-void CalibrateGyro(MPU6886_Handle *handle, float *gyroBiasX, float *gyroBiasY, float *gyroBiasZ);
-void UpdateGyroBiasIfStationary(void);
-HAL_StatusTypeDef MPU6886_ReadGyroData(MPU6886_Handle *handle, float *gx_deg, float *gy_deg, float *gz_deg, float gyroBiasX, float gyroBiasY, float gyroBiasZ);
-void UpdateYaw(MPU6886_Handle *handle, float gyroBiasX, float gyroBiasY, float gyroBiasZ, float *roll, float *pitch, float *yaw);
 
 // PID Functions
 float PID_Compute(PIDController *pid, float setpoint, float measurement);
