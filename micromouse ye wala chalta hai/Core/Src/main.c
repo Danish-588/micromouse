@@ -5,125 +5,217 @@
 #include "i2c.h"
 #include "encoder.h"
 #include "vl53l0x_api.h"
+/* ============================================
+ *           1. Enumerations
+ * ============================================ */
+// Correction Modes Enumeration
+typedef enum {
+    rpm_corr,   // RPM Correction Mode
+    angle_corr, // Angle Correction Mode
+    seedhe,     // Straight Movement Mode
+    posi_corr,  // Position Correction Mode
+} CorrectionChoice;
 
-enum
-{
-	rpm_corr,
-	angle_corr,
-	seedhe,
-	posi_corr,
+// Global variable to hold the current correction choice
+CorrectionChoice correction_choice;
 
-}correction_choice;
-
+/* ============================================
+ *           2. Peripheral Handles
+ * ============================================ */
+// I2C Handles
+I2C_HandleTypeDef hi2c1;
 I2C_HandleTypeDef hi2c2;
 
-int test_angle=0;
-// Define handles for I2C and timers
-I2C_HandleTypeDef hi2c1;
-TIM_HandleTypeDef htim1;
-TIM_HandleTypeDef htim2; // For PWM generation on TIM2
-TIM_HandleTypeDef htim4; // For encoder on TIM4
+// Timer Handles
+TIM_HandleTypeDef htim1;  // Encoder on TIM1
+TIM_HandleTypeDef htim2;  // PWM generation on TIM2
+TIM_HandleTypeDef htim4;  // Encoder on TIM4
+TIM_HandleTypeDef htim10; // Timer for Control Loop
+
+// UART Handle
 UART_HandleTypeDef huart2; // Assuming using USART2 now
-TIM_HandleTypeDef htim10;
-uint8_t rx_buff2;
 
-uint8_t Message[64];
-uint8_t MessageLen;
+/* ============================================
+ *           3. Global Variables
+ * ============================================ */
+// Sensor Data Variables
+float accX = 0.0f, accY = 0.0f, accZ = 0.0f;
+float gyroX_rad = 0.0f, gyroY_rad = 0.0f, gyroZ_rad = 0.0f; // Gyroscope data in radians
+float gx_deg = 0.0f, gy_deg = 0.0f, gz_deg = 0.0f;         // Gyroscope data in degrees
+float yaw_angle = 0.0f;
+float temp = 0.0f;
 
-VL53L0X_RangingMeasurementData_t RangingData;
-VL53L0X_Dev_t  vl53l0x_c; // center module
-VL53L0X_DEV    Dev = &vl53l0x_c;
-
-
-long delay_counter = 0;
-volatile int retard  = 0;
-
-
-int old_vel1=0, old_vel2=0;
-
-float roll = 0.0, pitch = 0.0, yaw = 0.0;
+// IMU Variables
+float roll = 0.0f, pitch = 0.0f, yaw = 0.0f;
 int gyro_calib = 0;
-int t1=0,t2=0;
-// Global variables for gyroscope bias
+
+// Gyroscope Bias
 float gyroBiasX = 0.0f;
 float gyroBiasY = 0.0f;
 float gyroBiasZ = 0.0f;
 
-float Kp = 1.0;  // Proportional gain
-float Ki = 0.0;  // Integral gain
-float Kd = 0.05; // Derivative gain
+// PWM and Control Variables
+float Kp = 1.0f;   // Proportional gain
+float Ki = 0.0f;   // Integral gain
+float Kd = 0.05f;  // Derivative gain
 
-float target_yaw = 0.0f; // Target yaw angle (e.g., to maintain a straight path)
-uint32_t pwm_left = 0; // Initial PWM for left wheel
-uint32_t pwm_right = 0; // Initial PWM for right wheel
-float target_velocity = 1000; // Desired velocity in encoder counts per minute
-float previous_error = 0;
-float integral = 0;
+float target_yaw = 0.0f;       // Target yaw angle (e.g., to maintain a straight path)
+uint32_t pwm_left = 0;         // Initial PWM for left wheel
+uint32_t pwm_right = 0;        // Initial PWM for right wheel
+float target_velocity = 1000.0f; // Desired velocity in encoder counts per minute
+float previous_error = 0.0f;
+float integral = 0.0f;
 
-// Global variables to hold sensor data
-float accX = 0, accY = 0, accZ = 0;
-float gyroX_rad = 0, gyroY_rad = 0, gyroZ_rad = 0; // Gyroscope data in radians
-   float yaw_angle = 0.0;
-   volatile uint32_t prevTime = 0;
-float gx_deg = 0, gy_deg = 0, gz_deg = 0; // Gyroscope data in degrees
-float temp = 0;
-volatile int count = 0;
+// Encoder Variables
 volatile int velocity1 = 0;
-volatile int velocity2= 0;
+volatile int velocity2 = 0;
+int old_vel1 = 0, old_vel2 = 0;
+int cpr = 3000; // Counts per revolution
+
+// Control Loop Variables
+long delay_counter = 0;
+volatile int retard = 0;
+
+// Miscellaneous Variables
+uint8_t rx_buff2;
+uint8_t Message[64];
+uint8_t MessageLen;
 uint16_t distance = 0; // Distance variable for VL53L1X sensor
+volatile uint32_t prevTime = 0;
+volatile int count = 0;
 
-// PWM parameters for debugging
+// PWM Parameters for Debugging
 uint32_t pwm_frequency = 1000;  // 1 kHz default frequency
-uint32_t duty_cycle = 69;       // 50% default duty cycle
+uint32_t duty_cycle = 69;       // 69% default duty cycle
 
-// Global variables for status tracking
-HAL_StatusTypeDef acc_status = HAL_OK, gyro_status = HAL_OK, temp_status = HAL_OK, init_status = HAL_OK;
+// Status Tracking Variables
+HAL_StatusTypeDef acc_status = HAL_OK;
+HAL_StatusTypeDef gyro_status = HAL_OK;
+HAL_StatusTypeDef temp_status = HAL_OK;
+HAL_StatusTypeDef init_status = HAL_OK;
 
-// Function prototypes
-void SystemClock_Config(void);
-static void MX_GPIO_Init(void);
-//static void MX_I2C1_Init(void);
-static void MX_TIM2_Init(void); // TIM2 for PWM generation
-static void MX_TIM1_Init(void); // TIM2 for PWM generation
-static void MX_TIM4_Init(void); // TIM4 for encoder
-void LED_Blink(void);
-void MX_I2C2_Init(void);
+// VL53L0X Variables
+VL53L0X_RangingMeasurementData_t RangingData;
+VL53L0X_Dev_t vl53l0x_c; // Center module
+VL53L0X_DEV Dev = &vl53l0x_c;
 
-uint32_t PID_CalculateStraightWithYawCorrection(float current_rpm1, float current_rpm2, float target_rpm1, float target_rpm2, float current_yaw, float target_yaw, uint32_t *pwm_left, uint32_t *pwm_right);
+// Message Array
 float sensorData[7]; // Adjust size based on your usage
 
+// Test Angle
+int test_angle = 0;
+
+/* ============================================
+ *    4. Structures and Typedefs
+ * ============================================ */
+// PID Controller Struct
+typedef struct {
+    float Kp;               // Proportional gain
+    float Ki;               // Integral gain
+    float Kd;               // Derivative gain
+    float integral;         // Integral sum
+    float previous_error;   // Previous error value
+} PIDController;
+
+/* ============================================
+ *    5. PID Controllers Initialization
+ * ============================================ */
+// Initialize PID Controllers for Motor 1, Motor 2, and Yaw Control
+PIDController pid_motor1 = {
+    .Kp = 10.0f,
+    .Ki = 0.0f,
+    .Kd = 0.05f,
+    .integral = 0.0f,
+    .previous_error = 0.0f
+};
+
+PIDController pid_motor2 = {
+    .Kp = 10.0f,
+    .Ki = 0.0f,
+    .Kd = 0.05f,
+    .integral = 0.0f,
+    .previous_error = 0.0f
+};
+
+PIDController pid_yaw = {
+    .Kp = 1.0f,
+    .Ki = 0.01f,
+    .Kd = 0.05f,
+    .integral = 0.0f,
+    .previous_error = 0.0f
+};
+
+/* ============================================
+ *         6. Function Prototypes
+ * ============================================ */
+// System and Peripheral Initialization
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+// static void MX_I2C1_Init(void); // Currently commented out
+static void MX_TIM2_Init(void); // TIM2 for PWM generation
+static void MX_TIM1_Init(void); // TIM1 for Encoder
+static void MX_TIM4_Init(void); // TIM4 for Encoder
+static void MX_TIM10_Init(void); // TIM10 for Control Loop
+void MX_I2C2_Init(void);
+
+// LED Control
+void LED_Blink(void);
+
+// UART Functions
+void arduimu_init(void);
+void arduimu_isr(void);
+void arduimu_poll(void);
+void uart_init(UART_HandleTypeDef *huart, uint32_t baudrate, void (*isr_callback)(void));
+
+// Gyroscope Functions
+void CalibrateGyro(MPU6886_Handle *handle, float *gyroBiasX, float *gyroBiasY, float *gyroBiasZ);
+void UpdateGyroBiasIfStationary(void);
+HAL_StatusTypeDef MPU6886_ReadGyroData(MPU6886_Handle *handle, float *gx_deg, float *gy_deg, float *gz_deg, float gyroBiasX, float gyroBiasY, float gyroBiasZ);
+void UpdateYaw(MPU6886_Handle *handle, float gyroBiasX, float gyroBiasY, float gyroBiasZ, float *roll, float *pitch, float *yaw);
+
+// PID Functions
+float PID_Compute(PIDController *pid, float setpoint, float measurement);
+uint32_t PID_CalculateStraightWithYawCorrection(float current_rpm1, float current_rpm2, float target_rpm1, float target_rpm2, float current_yaw, float target_yaw, uint32_t *pwm_left, uint32_t *pwm_right);
+
+// Control Loop
+void ControlLoop(void);
+
+// Error Handling
+void Error_Handler(void);
+
+// I2C MSP Functions
+void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle);
+void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle);
+
+/* ============================================
+ *    7. PID Control Variables for Motors
+ * ============================================ */
 // PID Control Variables for Motor 1
 float Kp1 = 10.0f;  // Proportional gain
-float Ki1 = 0.0f;  // Integral gain
-float Kd1 = 0.05f; // Derivative gain
+float Ki1 = 0.0f;   // Integral gain
+float Kd1 = 0.05f;  // Derivative gain
 float previous_error1 = 0.0f;
 float integral1 = 0.0f;
 int dir1 = -1;
 
 // PID Control Variables for Motor 2
 float Kp2 = 10.0f;  // Proportional gain
-float Ki2 = 0.0f;  // Integral gain
-float Kd2 = 0.05f; // Derivative gain
+float Ki2 = 0.0f;   // Integral gain
+float Kd2 = 0.05f;  // Derivative gain
 float previous_error2 = 0.0f;
 float integral2 = 0.0f;
 int dir2 = 1;
 
+// PWM Values
 uint32_t pwm_value1 = 0;
 uint32_t pwm_value2 = 0;
-float target_rpm1 = 150.0f; // Desired velocity in RPM
-int current_rpm1=0;
-float target_rpm2 = 150.0f; // Desired velocity in RPM
-int current_rpm2=0;
-int cpr = 3000;
 
-// PID Controller Struct
-typedef struct {
-    float Kp;
-    float Ki;
-    float Kd;
-    float integral;
-    float previous_error;
-} PIDController;
+// RPM Targets and Current RPMs
+float target_rpm1 = 150.0f; // Desired velocity in RPM
+int current_rpm1 = 0;
+float target_rpm2 = 150.0f; // Desired velocity in RPM
+int current_rpm2 = 0;
+
 
 // General PID Compute Function
 float PID_Compute(PIDController *pid, float setpoint, float measurement) {
@@ -136,13 +228,6 @@ float PID_Compute(PIDController *pid, float setpoint, float measurement) {
     float output = (pid->Kp * error) + (pid->Ki * pid->integral) + (pid->Kd * derivative);
     return output;
 }
-
-// Initialize PID Controllers
-PIDController pid_motor1 = { .Kp = 10.0f, .Ki = 0.0f, .Kd = 0.05f, .integral = 0.0f, .previous_error = 0.0f };
-PIDController pid_motor2 = { .Kp = 10.0f, .Ki = 0.0f, .Kd = 0.05f, .integral = 0.0f, .previous_error = 0.0f };
-PIDController pid_yaw = { .Kp = 1.0f, .Ki = 0.01f, .Kd = 0.05f, .integral = 0.0f, .previous_error = 0.0f };
-
-
 
 uint32_t PID_CalculatePWM1(float current_rpm1)
 {
