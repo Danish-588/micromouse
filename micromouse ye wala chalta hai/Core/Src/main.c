@@ -38,22 +38,6 @@ UART_HandleTypeDef huart2; // Assuming using USART2 now
 /* ============================================
  *           3. Global Variables
  * ============================================ */
-// Sensor Data Variables
-float accX = 0.0f, accY = 0.0f, accZ = 0.0f;
-float gyroX_rad = 0.0f, gyroY_rad = 0.0f, gyroZ_rad = 0.0f; // Gyroscope data in radians
-float gx_deg = 0.0f, gy_deg = 0.0f, gz_deg = 0.0f;         // Gyroscope data in degrees
-float yaw_angle = 0.0f;
-float temp = 0.0f;
-
-// IMU Variables
-float roll = 0.0f, pitch = 0.0f, yaw = 0.0f;
-int gyro_calib = 0;
-
-// Gyroscope Bias
-float gyroBiasX = 0.0f;
-float gyroBiasY = 0.0f;
-float gyroBiasZ = 0.0f;
-
 // PWM and Control Variables
 float Kp = 1.0f;   // Proportional gain
 float Ki = 0.0f;   // Integral gain
