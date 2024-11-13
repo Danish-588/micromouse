@@ -7,7 +7,10 @@
 #include "encoder.h"
 
 static uint16_t encoder_ppr = 3000;
-float old_value_enc = 0;
+float old_value_enc= 0;
+float old_value_enc_TIM1 = 0;
+float old_value_enc_TIM4 = 0;
+
 
 /**
  * @brief Initialize the specified timer for encoder mode with specified PPR.
@@ -61,38 +64,93 @@ int Encoder_GetCount(TIM_HandleTypeDef *htim)
  * @param htim: Timer handle pointer for the encoder
  * @retval Velocity as a float in counts per second
  */
-float Encoder_GetVelocity(TIM_HandleTypeDef *htim)
-{
+float Encoder_GetVelocity(TIM_HandleTypeDef *htim) {
+    static int last_count[2] = {0};
+    static uint32_t last_time[2] = {0};
 
-    static int last_count[2] = {0};       // Store previous count for each encoder
-    static uint32_t last_time[2] = {0};   // Store previous time for each encoder
+    int encoder_index = (htim->Instance == TIM1) ? 0 : 1;
+    int current_count = __HAL_TIM_GET_COUNTER(htim);
+    uint32_t current_time = HAL_GetTick();
 
-    int encoder_index = (htim->Instance == TIM1) ? 0 : 1;  // Use 0 for TIM1, 1 for TIM4
+    float time_diff = (current_time - last_time[encoder_index]) / 1000.0f;
+    int32_t count_diff = current_count - last_count[encoder_index];
+
+    last_count[encoder_index] = current_count;
+    last_time[encoder_index] = current_time;
+
+    float velocity = 0.0f;
+
+    if (time_diff > 0) {
+        velocity = count_diff / time_diff;
+
+        // Validate the velocity
+        if (isnan(velocity) || fabs(velocity) > 15000) {
+            velocity = old_value_enc;  // Use last valid velocity if out of range or NaN
+        } else {
+            old_value_enc = velocity;  // Update last valid velocity
+        }
+    }
+
+    return velocity;
+}
+float Encoder_GetVelocity_TIM1(TIM_HandleTypeDef *htim) {
+    static int last_count = 0;
+    static uint32_t last_time = 0;
 
     int current_count = __HAL_TIM_GET_COUNTER(htim);
     uint32_t current_time = HAL_GetTick();
 
-    // Calculate time difference in seconds
-    float time_diff = (current_time - last_time[encoder_index]) / 1000.0f; // Convert ms to seconds
+    float time_diff = (current_time - last_time) / 1000.0f;
+    int32_t count_diff = current_count - last_count;
 
-    // Calculate count difference
-    int32_t count_diff = current_count - last_count[encoder_index];
+    last_count = current_count;
+    last_time = current_time;
 
-    // Store current count and time for the next call
-    last_count[encoder_index] = current_count;
-    last_time[encoder_index] = current_time;
+    float velocity = 0.0f;
 
+    if (time_diff > 0.001f) {  // Small threshold to avoid division by near-zero time
+        velocity = count_diff / time_diff;
 
-    old_value_enc=count_diff / time_diff;
-    if (time_diff > 0)
-    {
-		if(fabs(count_diff)<1000)
-			return count_diff / time_diff;
-		else
-			return old_value_enc;
+        // Only filter out NaN and extremely large spikes
+        if (isnan(velocity) || fabs(velocity) > 15000) {
+            velocity = old_value_enc_TIM1;  // Use last valid velocity if out of range or NaN
+        } else {
+            old_value_enc_TIM1 = velocity;  // Update last valid velocity for TIM1
+        }
+    } else {
+        velocity = old_value_enc_TIM1;  // Maintain last valid velocity if time_diff is too short
     }
 
-    else
-        return 0.0f;
+    return velocity;
+}
 
+float Encoder_GetVelocity_TIM4(TIM_HandleTypeDef *htim) {
+    static int last_count = 0;
+    static uint32_t last_time = 0;
+
+    int current_count = __HAL_TIM_GET_COUNTER(htim);
+    uint32_t current_time = HAL_GetTick();
+
+    float time_diff = (current_time - last_time) / 1000.0f;
+    int32_t count_diff = current_count - last_count;
+
+    last_count = current_count;
+    last_time = current_time;
+
+    float velocity = 0.0f;
+
+    if (time_diff > 0.001f) {  // Small threshold to avoid division by near-zero time
+        velocity = count_diff / time_diff;
+
+        // Only filter out NaN and extremely large spikes
+        if (isnan(velocity) || fabs(velocity) > 15000) {
+            velocity = old_value_enc_TIM4;  // Use last valid velocity if out of range or NaN
+        } else {
+            old_value_enc_TIM4 = velocity;  // Update last valid velocity for TIM4
+        }
+    } else {
+        velocity = old_value_enc_TIM4;  // Maintain last valid velocity if time_diff is too short
+    }
+
+    return velocity;
 }
