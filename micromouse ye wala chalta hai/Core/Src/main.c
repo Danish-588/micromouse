@@ -10,14 +10,13 @@
  * ============================================ */
 // Correction Modes Enumeration
 typedef enum {
-    rpm_corr,   // RPM Correction Mode
-    angle_corr, // Angle Correction Mode
-    seedhe,     // Straight Movement Mode
-    posi_corr,  // Position Correction Mode
+	start,
+	stop,
+	stop_plus,
 } CorrectionChoice;
 
 // Global variable to hold the current correction choice
-CorrectionChoice correction_choice;
+CorrectionChoice navigation;
 
 /* ============================================
  *           2. Peripheral Handles
@@ -397,23 +396,16 @@ int main(void)
     MX_TIM10_Init();
     HAL_TIM_OC_Start_IT(&htim10, TIM_CHANNEL_1);
 
-//    MX_I2C1_Init();
-//    MX_I2C2_Init();
-    HAL_Init();
-//    MX_I2C1_Init();
+    MX_I2C1_Init();
+    MX_I2C2_Init();
 
     Encoder_Init(&htim1, 3);
     Encoder_Init(&htim4, 3);
 
     arduimu_init();
 
-
-
-//    HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_RESET); // Disable XSHUT
-    HAL_Delay(20);
-//    HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_SET); // Enable XSHUT
-    HAL_Delay(20);
-
+    Dev->I2cHandle = &hi2c1;
+    Dev->I2cDevAddr = 0x52;
 
     VL53L0X_WaitDeviceBooted( Dev );
      VL53L0X_DataInit( Dev );
@@ -451,22 +443,24 @@ int main(void)
     	current_rpm_left = 60* encoder_velocity_left/cpr;
     	current_rpm_right = 60* encoder_velocity_right/cpr;
 
-        switch (correction_choice) {
-            case rpm_corr: {
-
+        switch (navigation) {
+            case start: {
+            	req_vel_x = 0.18;
+            	navigation++;
             } break;
 
-            case angle_corr: {
-
+            case stop: {
+            	if (pos_x_embed>0.05)
+            	{
+            		req_vel_x = 0;
+            		navigation++;
+            	}
             } break;
+            case stop_plus:
+            {
 
-            case seedhe: {
-
-            } break;
-
-            case posi_corr: {
-
-            } break;
+            }
+            break;
         }
 
         delta_time = get_delta_time();
