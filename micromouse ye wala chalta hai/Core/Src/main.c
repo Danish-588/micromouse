@@ -38,6 +38,8 @@ UART_HandleTypeDef huart2; // Assuming using USART2 now
 /* ============================================
  *           3. Global Variables
  * ============================================ */
+#define WHEEL_RADIUS 0.05    // radius in meters (example: 5 cm)
+#define WHEEL_DISTANCE 0.3   // distance in meters (example: 30 cm)
 // PWM and Control Variables
 float Kp = 1.0f;   // Proportional gain
 float Ki = 0.0f;   // Integral gain
@@ -82,6 +84,10 @@ float sensorData[7]; // Adjust size based on your usage
 
 // Test Angle
 int test_angle = 0;
+
+
+volatile float req_vel_x = 0;
+volatile float req_vel_w = 0;
 
 /* ============================================
  *    4. Structures and Typedefs
@@ -146,6 +152,7 @@ void uart_init(UART_HandleTypeDef *huart, uint32_t baudrate, void (*isr_callback
 
 // PID Functions
 float PID_Compute(PIDController *pid, float setpoint, float measurement);
+void vel_to_rpm();
 void rpm_to_pwm();
 
 // Control Loop
@@ -182,10 +189,10 @@ uint32_t pwm_value1 = 0;
 uint32_t pwm_value2 = 0;
 
 // RPM Targets and Current RPMs
-float target_rpm1 = 150.0f; // Desired velocity in RPM
-int current_rpm1 = 0;
-float target_rpm2 = 150.0f; // Desired velocity in RPM
-int current_rpm2 = 0;
+float target_rpm_left = 150.0f; // Desired velocity in RPM
+int current_rpm_left = 0;
+float target_rpm_right = 150.0f; // Desired velocity in RPM
+int current_rpm_right = 0;
 
 
 // General PID Compute Function
@@ -200,10 +207,21 @@ float PID_Compute(PIDController *pid, float setpoint, float measurement) {
     return output;
 }
 
+void vel_to_rpm()
+{
+    // Compute linear velocities for each wheel
+    double v_left = req_vel_x - (req_vel_w * WHEEL_DISTANCE / 2.0);
+    double v_right = req_vel_x + (req_vel_w * WHEEL_DISTANCE / 2.0);
+
+    // Convert linear velocities to RPM
+    target_rpm_left = (v_left / (2 * 3.141592653589793 * WHEEL_RADIUS)) * 60;
+    target_rpm_right = (v_right / (2 * 3.141592653589793 * WHEEL_RADIUS)) * 60;
+}
+
 void rpm_to_pwm()
 {
-	pwm_left = PID_Compute(&pid_motor1, target_rpm1, current_rpm1 * dir1);
-	pwm_right = PID_Compute(&pid_motor2, target_rpm2, current_rpm2 * dir2);
+	pwm_left = PID_Compute(&pid_motor1, target_rpm_left, current_rpm_left * dir1);
+	pwm_right = PID_Compute(&pid_motor2, target_rpm_right, current_rpm_right * dir2);
 
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwm_left);
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwm_right);
@@ -408,12 +426,12 @@ int main(void)
     	velocity1 = Encoder_GetVelocity(&htim1);
         velocity2 = Encoder_GetVelocity(&htim4); // Assuming velocity is in counts per minute
 
-    	current_rpm1 = 60* old_vel1/cpr;
-    	current_rpm2 = 60* old_vel2/cpr;
+    	current_rpm_left = 60* old_vel1/cpr;
+    	current_rpm_right = 60* old_vel2/cpr;
 
         switch (correction_choice) {
             case rpm_corr: {
-            	rpm_to_pwm();
+            	vel_to_rpm();
             } break;
 
             case angle_corr: {
@@ -430,6 +448,7 @@ int main(void)
             } break;
         }
 
+            	rpm_to_pwm();
 
 
 
