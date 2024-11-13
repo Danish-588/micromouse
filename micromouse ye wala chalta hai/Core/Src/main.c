@@ -56,7 +56,7 @@ float integral = 0.0f;
 volatile int velocity1 = 0;
 volatile int velocity2 = 0;
 int old_vel1 = 0, old_vel2 = 0;
-int cpr = 3000; // Counts per revolution
+int cpr = 3666;
 
 // Control Loop Variables
 long delay_counter = 0;
@@ -223,8 +223,8 @@ void vel_to_rpm()
 
     prev_theta_correction = theta_correction;
 
-    double v_left = req_vel_x + (req_vel_w * WHEEL_DISTANCE / 2.0);
-    double v_right = req_vel_x - (req_vel_w * WHEEL_DISTANCE / 2.0);
+    double v_left = req_vel_x - (req_vel_w * WHEEL_DISTANCE / 2.0);
+    double v_right = req_vel_x + (req_vel_w * WHEEL_DISTANCE / 2.0);
     target_rpm_left = (v_left / (2 * 3.141592653589793 * WHEEL_RADIUS)) * 60;
     target_rpm_right = (v_right / (2 * 3.141592653589793 * WHEEL_RADIUS)) * 60;
 }
