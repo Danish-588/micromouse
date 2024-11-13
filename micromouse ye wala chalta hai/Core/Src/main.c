@@ -38,6 +38,8 @@ UART_HandleTypeDef huart2; // Assuming using USART2 now
 /* ============================================
  *           3. Global Variables
  * ============================================ */
+#define WHEEL_RADIUS 0.05    // radius in meters (example: 5 cm)
+#define WHEEL_DISTANCE 0.3   // distance in meters (example: 30 cm)
 // PWM and Control Variables
 float Kp = 1.0f;   // Proportional gain
 float Ki = 0.0f;   // Integral gain
@@ -83,6 +85,10 @@ float sensorData[7]; // Adjust size based on your usage
 // Test Angle
 int test_angle = 0;
 
+int theta_correction_enabled = 1;
+volatile float req_vel_x = 0.0;
+volatile float req_vel_w = 0.0;
+
 /* ============================================
  *    4. Structures and Typedefs
  * ============================================ */
@@ -116,9 +122,9 @@ PIDController pid_motor2 = {
 };
 
 PIDController pid_yaw = {
-    .Kp = 1.0f,
-    .Ki = 0.01f,
-    .Kd = 0.05f,
+    .Kp = 0.17f,
+    .Ki = 0.0f,
+    .Kd = 0.005f,
     .integral = 0.0f,
     .previous_error = 0.0f
 };
@@ -146,7 +152,8 @@ void uart_init(UART_HandleTypeDef *huart, uint32_t baudrate, void (*isr_callback
 
 // PID Functions
 float PID_Compute(PIDController *pid, float setpoint, float measurement);
-uint32_t PID_CalculateStraightWithYawCorrection(float current_rpm1, float current_rpm2, float target_rpm1, float target_rpm2, float current_yaw, float target_yaw, uint32_t *pwm_left, uint32_t *pwm_right);
+void vel_to_rpm();
+void rpm_to_pwm();
 
 // Control Loop
 void ControlLoop(void);
@@ -182,10 +189,10 @@ uint32_t pwm_value1 = 0;
 uint32_t pwm_value2 = 0;
 
 // RPM Targets and Current RPMs
-float target_rpm1 = 150.0f; // Desired velocity in RPM
-int current_rpm1 = 0;
-float target_rpm2 = 150.0f; // Desired velocity in RPM
-int current_rpm2 = 0;
+float target_rpm_left = 150.0f; // Desired velocity in RPM
+int current_rpm_left = 0;
+float target_rpm_right = 150.0f; // Desired velocity in RPM
+int current_rpm_right = 0;
 
 
 // General PID Compute Function
@@ -200,192 +207,38 @@ float PID_Compute(PIDController *pid, float setpoint, float measurement) {
     return output;
 }
 
-uint32_t PID_CalculatePWM1(float current_rpm1)
+void vel_to_rpm()
 {
-    float error = target_rpm1 - current_rpm1;
-    integral1 += error; // Accumulate integral
-    float derivative = error - previous_error1; // Calculate derivative
-    previous_error1 = error;
+    if (theta_correction_enabled) {
+        // Calculate angular error with shortest path consideration
+        float error = target_yaw - raw_angle;
 
-    float corr = (Kp1 * error) + (Ki1 * integral1) + (Kd1 * derivative); // Full PID correction
+        // Adjust error to be within the range of -180 to 180 for shortest path
+        if (error > 180) {
+            error -= 360;
+        } else if (error < -180) {
+            error += 360;
+        }
 
-    if (corr > 0)
-    {
-        pwm_value1 += (uint32_t)corr;
+        // Use PID to compute required angular velocity correction based on the error
+        req_vel_w = PID_Compute(&pid_yaw, 0.0, error);  // Setpoint is 0, as we want to minimize the error
     }
-    else if (corr < 0)
-    {
-        if (pwm_value1 > (uint32_t)fabsf(corr))
-            pwm_value1 -= (uint32_t)fabsf(corr);
-        else
-            pwm_value1 = 0;
-    }
-
-    // Clamp PWM to valid range
-    const uint32_t PWM_MAX = 1023;
-    if (pwm_value1 > PWM_MAX)
-        pwm_value1 = PWM_MAX;
-
-    return pwm_value1;
+    // Compute linear velocities for each wheel
+    double v_left = req_vel_x + (req_vel_w * WHEEL_DISTANCE / 2.0);
+    double v_right = req_vel_x - (req_vel_w * WHEEL_DISTANCE / 2.0);
+    // Convert linear velocities to RPM
+    target_rpm_left = (v_left / (2 * 3.141592653589793 * WHEEL_RADIUS))	 * 60;
+    target_rpm_right = (v_right / (2 * 3.141592653589793 * WHEEL_RADIUS)) * 60;
 }
 
-uint32_t PID_CalculatePWM2(float current_rpm2)
+void rpm_to_pwm()
 {
-    float error = target_rpm2 - current_rpm2;
-    integral2 += error; // Accumulate integral
-    float derivative = error - previous_error2; // Calculate derivative
-    previous_error2 = error;
+	pwm_left = PID_Compute(&pid_motor1, target_rpm_left, current_rpm_left * dir1);
+	pwm_right = PID_Compute(&pid_motor2, target_rpm_right, current_rpm_right * dir2);
 
-    float corr = (Kp2 * error) + (Ki2 * integral2) + (Kd2 * derivative); // Full PID correction
-
-    if (corr > 0)
-    {
-        pwm_value2 += (uint32_t)corr;
-    }
-    else if (corr < 0)
-    {
-        if (pwm_value2 > (uint32_t)fabsf(corr))
-            pwm_value2 -= (uint32_t)fabsf(corr);
-        else
-            pwm_value2 = 0;
-    }
-
-    // Clamp PWM to valid range
-    const uint32_t PWM_MAX = 1023;
-    if (pwm_value2 > PWM_MAX)
-        pwm_value2 = PWM_MAX;
-
-    return pwm_value2;
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwm_left);
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwm_right);
 }
-
-uint32_t PID_CalculateYawPWM(float current_yaw, float target_yaw, uint32_t *pwm_left, uint32_t *pwm_right)
-{
-    float yaw_error = target_yaw - current_yaw; // Calculate yaw error
-    static float yaw_integral = 0.0f;
-    static float previous_yaw_error = 0.0f;
-    float yaw_Kp = 1.0f; // Proportional gain for yaw control, adjust as needed
-    float yaw_Kd = 0.05f; // Derivative gain for yaw control
-    float yaw_Ki = 0.01f; // Integral gain for yaw control
-
-    yaw_integral += yaw_error; // Accumulate integral
-    float yaw_derivative = yaw_error - previous_yaw_error; // Calculate derivative
-    previous_yaw_error = yaw_error;
-
-    // Calculate correction using PID
-    float correction = (yaw_Kp * yaw_error) + (yaw_Ki * yaw_integral) + (yaw_Kd * yaw_derivative);
-
-    if (yaw_error > 0)
-    {
-        *pwm_left += (uint32_t)fabsf(correction);
-        if (*pwm_right > (uint32_t)fabsf(correction))
-            *pwm_right -= (uint32_t)fabsf(correction);
-        else
-            *pwm_right = 0;
-    }
-    else if (yaw_error < 0)
-    {
-        *pwm_right += (uint32_t)fabsf(correction);
-        if (*pwm_left > (uint32_t)fabsf(correction))
-            *pwm_left -= (uint32_t)fabsf(correction);
-        else
-            *pwm_left = 0;
-    }
-
-    // Clamp PWM to valid range
-    const uint32_t PWM_MAX = 1023;
-    if (*pwm_left > PWM_MAX) *pwm_left = PWM_MAX;
-    if (*pwm_right > PWM_MAX) *pwm_right = PWM_MAX;
-
-    return 0; // Return value can be modified to indicate status if needed
-}
-
-uint32_t PID_CalculateStraightWithYawCorrection(
-    float current_rpm1, float current_rpm2,
-    float target_rpm1, float target_rpm2,
-    float current_yaw, float target_yaw,
-    uint32_t *pwm_left, uint32_t *pwm_right)
-{
-    // Static variables to maintain state between calls
-    static float integral1 = 0.0f, integral2 = 0.0f;
-    static float previous_error1 = 0.0f, previous_error2 = 0.0f;
-    static float yaw_integral = 0.0f, previous_yaw_error = 0.0f;
-
-    // PID constants for speed control (set appropriate values)
-    float Kp1 = 1.0, Ki1 = 0, Kd1 = 0;
-    float Kp2 = 1.0, Ki2 = 0, Kd2 = 0;
-
-    // PID constants for yaw control
-    float yaw_Kp = 1.0, yaw_Ki = 0, yaw_Kd = 0;
-
-    // Speed errors
-    float speed_error1 = target_rpm1 - current_rpm1;
-    float speed_error2 = target_rpm2 - current_rpm2;
-
-    // Integrate errors
-    integral1 += speed_error1;
-    integral2 += speed_error2;
-
-    // Derivative of errors
-    float derivative1 = speed_error1 - previous_error1;
-    float derivative2 = speed_error2 - previous_error2;
-
-    // Update previous errors
-    previous_error1 = speed_error1;
-    previous_error2 = speed_error2;
-
-    // PID calculations for speed
-    float corr1 = (Kp1 * speed_error1) + (Ki1 * integral1) + (Kd1 * derivative1);
-    float corr2 = (Kp2 * speed_error2) + (Ki2 * integral2) + (Kd2 * derivative2);
-
-    // Yaw error with wrap-around handling
-    float yaw_error = target_yaw - current_yaw;
-
-    // Adjust yaw_error to be within -180 to +180 degrees
-    if (yaw_error > 180.0f) {
-        yaw_error -= 360.0f;
-    } else if (yaw_error < -180.0f) {
-        yaw_error += 360.0f;
-    }
-
-    // Integrate yaw error
-    yaw_integral += yaw_error;
-
-    // Derivative of yaw error
-    float yaw_derivative = yaw_error - previous_yaw_error;
-    previous_yaw_error = yaw_error;
-
-    // PID calculation for yaw
-    float yaw_correction = (yaw_Kp * yaw_error) + (yaw_Ki * yaw_integral) + (yaw_Kd * yaw_derivative);
-
-    // Total corrections
-    float total_corr_left = corr1 + yaw_correction;
-    float total_corr_right = corr2 - yaw_correction;
-
-//     Clamp corrections to prevent excessive adjustments
-//    const float CORR_MAX = /* your value */; // Set maximum correction value
-//    if (total_corr_left > CORR_MAX) total_corr_left = CORR_MAX;
-//    if (total_corr_left < -CORR_MAX) total_corr_left = -CORR_MAX;
-//    if (total_corr_right > CORR_MAX) total_corr_right = CORR_MAX;
-//    if (total_corr_right < -CORR_MAX) total_corr_right = -CORR_MAX;
-
-    // Update PWM values with clamped corrections
-    // Ensure PWM values do not go negative
-    float new_pwm_left = (float)(*pwm_left) + total_corr_left;
-    float new_pwm_right = (float)(*pwm_right) + total_corr_right;
-
-    // Clamp PWM values to valid range
-    const uint32_t PWM_MAX = 1023;
-    if (new_pwm_left > PWM_MAX) new_pwm_left = PWM_MAX;
-    if (new_pwm_left < 0.0f) new_pwm_left = 0.0f;
-    if (new_pwm_right > PWM_MAX) new_pwm_right = PWM_MAX;
-    if (new_pwm_right < 0.0f) new_pwm_right = 0.0f;
-
-    *pwm_left = (uint32_t)new_pwm_left;
-    *pwm_right = (uint32_t)new_pwm_right;
-
-    return 0;
-}
-
 
 
 // Function to initialize UART2 and enable interrupt
@@ -445,12 +298,6 @@ void USART2_IRQHandler(void) {
     empty();
 }
 
-
-void ControlLoop()
-{
-	retard++;
-}
-
 void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM10) // Check if the interrupt is from TIM10
@@ -503,6 +350,12 @@ static void MX_TIM10_Init(void)
 
 
 
+
+
+void ControlLoop()
+{
+	retard++;
+}
 
 
 int main(void)
@@ -586,40 +439,30 @@ int main(void)
     	velocity1 = Encoder_GetVelocity(&htim1);
         velocity2 = Encoder_GetVelocity(&htim4); // Assuming velocity is in counts per minute
 
-    	current_rpm1 = 60* old_vel1/cpr;
-    	current_rpm2 = 60* old_vel2/cpr;
+    	current_rpm_left = 60* old_vel1/cpr;
+    	current_rpm_right = 60* old_vel2/cpr;
 
         switch (correction_choice) {
             case rpm_corr: {
-            	pwm_left = PID_Compute(&pid_motor1, target_rpm1, current_rpm1 * dir1);
-            	pwm_right = PID_Compute(&pid_motor2, target_rpm2, current_rpm2 * dir2);
-
-                // Update PWM values with clamping
-//                UpdatePWM(&pwm_value1, correction1);
-//                UpdatePWM(&pwm_value2, correction2);
+            	vel_to_rpm();
             } break;
 
             case angle_corr: {
-                float w_req = PID_Compute(&pid_yaw, target_yaw, raw_angle);
 
-                // Apply yaw correction to PWM values
-//                ApplyYawCorrection(&pwm_left, &pwm_right, yaw_correction);
             } break;
 
             case seedhe: {
-                PID_CalculateStraightWithYawCorrection(
-                    current_rpm1, current_rpm2,
-                    target_rpm1, target_rpm2,
-                    test_angle, target_yaw,
-                    &pwm_left, &pwm_right);
+
             } break;
 
             case posi_corr: {
                 // Implement position correction as needed
             } break;
         }
-		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwm_left);
-		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwm_right);
+
+            	rpm_to_pwm();
+
+
 
 
 	    if(delay_counter%500 == 0)  // Assuming 10 iterations for your required delay
