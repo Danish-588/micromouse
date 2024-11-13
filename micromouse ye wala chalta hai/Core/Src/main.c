@@ -58,9 +58,10 @@ volatile int retard = 0;
 uint8_t rx_buff2;
 uint8_t Message[64];
 uint8_t MessageLen;
-uint16_t distance = 0; // Distance variable for VL53L1X sensor
 volatile uint32_t prevTime = 0;
 volatile int count = 0;
+volatile int front_sensor = 0.0f;
+volatile int left_sensor = 0.0f;
 
 // PWM Parameters for Debugging
 uint32_t pwm_frequency = 1000;  // 1 kHz default frequency
@@ -474,8 +475,10 @@ int main(void) {
 
         if (delay_counter % 10 == 0) {
             VL53L0X_PerformSingleRangingMeasurement(&dev1, &RangingData1);
+            left_sensor = RangingData1.RangeMilliMeter;
             VL53L0X_PerformSingleRangingMeasurement(&dev2, &RangingData2);
-            // Use RangingData1 and RangingData2 for distance measurements
+            front_sensor = RangingData2.RangeMilliMeter;
+
         }
 
         delay_counter++;
