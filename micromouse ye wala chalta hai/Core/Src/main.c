@@ -62,6 +62,7 @@ volatile uint32_t prevTime = 0;
 volatile int count = 0;
 volatile int front_sensor = 0.0f;
 volatile int left_sensor = 0.0f;
+volatile int target_left_sensor = 0.0f;
 
 // PWM Parameters for Debugging
 uint32_t pwm_frequency = 1000;  // 1 kHz default frequency
@@ -81,7 +82,8 @@ VL53L0X_RangingMeasurementData_t RangingData1, RangingData2;
 // Message Array
 float sensorData[7]; // Adjust size based on your usage
 
-int theta_correction = 1;
+volatile int theta_correction = 1;
+volatile int wall_follow = 0;
 volatile float req_vel_x = 0.0;
 volatile float req_vel_w = 0.0;
 volatile float current_vel_x = 0.0;
@@ -151,6 +153,7 @@ void uart_init(UART_HandleTypeDef *huart, uint32_t baudrate, void (*isr_callback
 // PID Functions
 float PID_Compute(PIDController *pid, float setpoint, float measurement);
 float get_delta_time();
+void vel_gen();
 void vel_to_rpm();
 void rpm_to_pwm();
 void update_pos_position(float raw_angle, float delta_time);
@@ -204,21 +207,37 @@ float PID_Compute(PIDController *pid, float setpoint, float measurement) {
     return output;
 }
 
-void vel_to_rpm()
+void vel_gen()
 {
     static bool prev_theta_correction = false;
+    static bool prev_wall_follow = false;
 
+    // ANGLE CORRECTION
     if (theta_correction) {
         float error = target_yaw - raw_angle;
         if (error > 180) error -= 360;
         else if (error < -180) error += 360;
         req_vel_w = PID_Compute(&pid_yaw, 0.0, error);
-    } else if (prev_theta_correction) {
-        req_vel_w = 0.0;
     }
+    else if (prev_theta_correction)
+        req_vel_w = 0.0;
+
+    //WALL FOLLOWING
+    if (wall_follow)
+    {
+		float error = (target_left_sensor - left_sensor) * -1;
+		req_vel_w = PID_Compute(&pid_yaw, 0.0f, error);  // Setpoint is 0 as we want error to be zero
+    }
+    else if (prev_wall_follow)
+        req_vel_w = 0.0;
 
     prev_theta_correction = theta_correction;
+    prev_wall_follow = wall_follow;
+}
 
+
+void vel_to_rpm()
+{
     double v_left = req_vel_x + (req_vel_w * WHEEL_DISTANCE / 2.0);
     double v_right = req_vel_x - (req_vel_w * WHEEL_DISTANCE / 2.0);
     target_rpm_left = (v_left / (2 * 3.141592653589793 * WHEEL_RADIUS)) * 60;
@@ -468,6 +487,8 @@ int main(void) {
 
         delta_time = get_delta_time();
         update_pos_position(raw_angle, delta_time);
+
+        vel_gen();
         vel_to_rpm();
         rpm_to_pwm();
 
