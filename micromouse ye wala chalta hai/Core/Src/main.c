@@ -86,8 +86,8 @@ float sensorData[7]; // Adjust size based on your usage
 int test_angle = 0;
 
 int theta_correction_enabled = 1;
-volatile float req_vel_x = 0;
-volatile float req_vel_w = 0;
+volatile float req_vel_x = 0.0;
+volatile float req_vel_w = 0.0;
 
 /* ============================================
  *    4. Structures and Typedefs
@@ -122,7 +122,7 @@ PIDController pid_motor2 = {
 };
 
 PIDController pid_yaw = {
-    .Kp = 1.0f,
+    .Kp = 0.17f,
     .Ki = 0.0f,
     .Kd = 0.005f,
     .integral = 0.0f,
