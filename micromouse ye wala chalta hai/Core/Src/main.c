@@ -85,7 +85,7 @@ float sensorData[7]; // Adjust size based on your usage
 // Test Angle
 int test_angle = 0;
 
-
+int theta_correction_enabled = 1;
 volatile float req_vel_x = 0;
 volatile float req_vel_w = 0;
 
@@ -123,8 +123,8 @@ PIDController pid_motor2 = {
 
 PIDController pid_yaw = {
     .Kp = 1.0f,
-    .Ki = 0.01f,
-    .Kd = 0.05f,
+    .Ki = 0.0f,
+    .Kd = 0.005f,
     .integral = 0.0f,
     .previous_error = 0.0f
 };
@@ -209,12 +209,25 @@ float PID_Compute(PIDController *pid, float setpoint, float measurement) {
 
 void vel_to_rpm()
 {
-    // Compute linear velocities for each wheel
-    double v_left = req_vel_x - (req_vel_w * WHEEL_DISTANCE / 2.0);
-    double v_right = req_vel_x + (req_vel_w * WHEEL_DISTANCE / 2.0);
+    if (theta_correction_enabled) {
+        // Calculate angular error with shortest path consideration
+        float error = target_yaw - raw_angle;
 
+        // Adjust error to be within the range of -180 to 180 for shortest path
+        if (error > 180) {
+            error -= 360;
+        } else if (error < -180) {
+            error += 360;
+        }
+
+        // Use PID to compute required angular velocity correction based on the error
+        req_vel_w = PID_Compute(&pid_yaw, 0.0, error);  // Setpoint is 0, as we want to minimize the error
+    }
+    // Compute linear velocities for each wheel
+    double v_left = req_vel_x + (req_vel_w * WHEEL_DISTANCE / 2.0);
+    double v_right = req_vel_x - (req_vel_w * WHEEL_DISTANCE / 2.0);
     // Convert linear velocities to RPM
-    target_rpm_left = (v_left / (2 * 3.141592653589793 * WHEEL_RADIUS)) * 60;
+    target_rpm_left = (v_left / (2 * 3.141592653589793 * WHEEL_RADIUS))	 * 60;
     target_rpm_right = (v_right / (2 * 3.141592653589793 * WHEEL_RADIUS)) * 60;
 }
 
@@ -285,12 +298,6 @@ void USART2_IRQHandler(void) {
     empty();
 }
 
-
-void ControlLoop()
-{
-	retard++;
-}
-
 void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM10) // Check if the interrupt is from TIM10
@@ -343,6 +350,12 @@ static void MX_TIM10_Init(void)
 
 
 
+
+
+void ControlLoop()
+{
+	retard++;
+}
 
 
 int main(void)
@@ -435,7 +448,6 @@ int main(void)
             } break;
 
             case angle_corr: {
-                float w_req = PID_Compute(&pid_yaw, target_yaw, raw_angle);
 
             } break;
 
