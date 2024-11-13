@@ -10,14 +10,13 @@
  * ============================================ */
 // Correction Modes Enumeration
 typedef enum {
-    rpm_corr,   // RPM Correction Mode
-    angle_corr, // Angle Correction Mode
-    seedhe,     // Straight Movement Mode
-    posi_corr,  // Position Correction Mode
+	start,
+	stop,
+	stop_plus,
 } CorrectionChoice;
 
 // Global variable to hold the current correction choice
-CorrectionChoice correction_choice;
+CorrectionChoice navigation;
 
 /* ============================================
  *           2. Peripheral Handles
@@ -40,23 +39,16 @@ UART_HandleTypeDef huart2; // Assuming using USART2 now
  * ============================================ */
 #define WHEEL_RADIUS 0.01315    // radius in meters
 #define WHEEL_DISTANCE 0.084   // distance in meters
-// PWM and Control Variables
-float Kp = 1.0f;   // Proportional gain
-float Ki = 0.0f;   // Integral gain
-float Kd = 0.05f;  // Derivative gain
+#define RPM_TO_RPS 0.10472     // conversion factor from RPM to radians per second (2 * PI / 60)
 
 float target_yaw = 0.0f;       // Target yaw angle (e.g., to maintain a straight path)
 uint32_t pwm_left = 0;         // Initial PWM for left wheel
 uint32_t pwm_right = 0;        // Initial PWM for right wheel
-float target_velocity = 1000.0f; // Desired velocity in encoder counts per minute
-float previous_error = 0.0f;
-float integral = 0.0f;
 
 // Encoder Variables
-volatile int velocity1 = 0;
-volatile int velocity2 = 0;
-int old_vel1 = 0, old_vel2 = 0;
-int cpr = 3000; // Counts per revolution
+volatile int encoder_velocity_left = 0;
+volatile int encoder_velocity_right = 0;
+int cpr = 3666;
 
 // Control Loop Variables
 long delay_counter = 0;
@@ -75,19 +67,24 @@ uint32_t pwm_frequency = 1000;  // 1 kHz default frequency
 uint32_t duty_cycle = 69;       // 69% default duty cycle
 
 // VL53L0X Variables
-VL53L0X_RangingMeasurementData_t RangingData;
+VL53L0X_RangingMeasurementData_t RangingData_Center, RangingData_Side;
 VL53L0X_Dev_t vl53l0x_c; // Center module
-VL53L0X_DEV Dev = &vl53l0x_c;
+VL53L0X_Dev_t vl53l0x_s; // Side module (second sensor)
 
+// Define pointers to each device instance
+VL53L0X_DEV Dev_Center = &vl53l0x_c;
+VL53L0X_DEV Dev_Side = &vl53l0x_s;
+
+VL53L0X_Dev_t dev1, dev2;
+VL53L0X_RangingMeasurementData_t RangingData1, RangingData2;
 // Message Array
 float sensorData[7]; // Adjust size based on your usage
-
-// Test Angle
-int test_angle = 0;
 
 int theta_correction = 1;
 volatile float req_vel_x = 0.0;
 volatile float req_vel_w = 0.0;
+volatile float current_vel_x = 0.0;
+volatile float current_vel_w = 0.0;
 
 /* ============================================
  *    4. Structures and Typedefs
@@ -152,8 +149,10 @@ void uart_init(UART_HandleTypeDef *huart, uint32_t baudrate, void (*isr_callback
 
 // PID Functions
 float PID_Compute(PIDController *pid, float setpoint, float measurement);
+float get_delta_time();
 void vel_to_rpm();
 void rpm_to_pwm();
+void update_pos_position(float raw_angle, float delta_time);
 
 // Control Loop
 void ControlLoop(void);
@@ -169,32 +168,28 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle);
  *    7. PID Control Variables for Motors
  * ============================================ */
 // PID Control Variables for Motor 1
-float Kp1 = 10.0f;  // Proportional gain
-float Ki1 = 0.0f;   // Integral gain
-float Kd1 = 0.05f;  // Derivative gain
-float previous_error1 = 0.0f;
-float integral1 = 0.0f;
 int dir1 = -1;
 
 // PID Control Variables for Motor 2
-float Kp2 = 10.0f;  // Proportional gain
-float Ki2 = 0.0f;   // Integral gain
-float Kd2 = 0.05f;  // Derivative gain
-float previous_error2 = 0.0f;
-float integral2 = 0.0f;
 int dir2 = 1;
 
-// PWM Values
-uint32_t pwm_value1 = 0;
-uint32_t pwm_value2 = 0;
-
 // RPM Targets and Current RPMs
-float target_rpm_left = 150.0f; // Desired velocity in RPM
-int current_rpm_left = 0;
-float target_rpm_right = 150.0f; // Desired velocity in RPM
-int current_rpm_right = 0;
+float target_rpm_left = 0.0f; // Desired velocity in RPM
+float current_rpm_left = 0.0f;
+float target_rpm_right = 0.0f; // Desired velocity in RPM
+float current_rpm_right = 0.0f;
 
+volatile float pos_x_ros = 0;
+volatile float pos_y_ros = 0;
+volatile float pos_x_embed = 0;
+volatile float pos_y_embed = 0;
+volatile float target_pos_x = 0;
+volatile float target_pos_y = 0;
 
+volatile float current_vel_left = 0.0;
+volatile float current_vel_right = 0.0;
+
+volatile float delta_time = 0.0f;
 
 // General PID Compute Function
 float PID_Compute(PIDController *pid, float setpoint, float measurement) {
@@ -239,6 +234,35 @@ void rpm_to_pwm()
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwm_right);
 }
 
+// Function to update pos position using current linear and angular velocities
+void update_pos_position(float raw_angle, float delta_time) {
+    // Convert raw_angle to radians
+    float angle_rad = raw_angle * (M_PI / 180.0);
+    current_vel_left = (current_rpm_left * RPM_TO_RPS) * WHEEL_RADIUS;
+    current_vel_right = (current_rpm_right * RPM_TO_RPS) * WHEEL_RADIUS;
+
+    // Calculate the forward velocity as the average of left and right velocities
+    current_vel_x = ((current_vel_left*dir1) + (current_vel_right*dir2)) / 2.0;
+    // Update pos position using current_vel_x and current_vel_w
+    pos_x_ros += current_vel_x * cos(angle_rad) * delta_time;
+    pos_y_ros += current_vel_x * sin(angle_rad) * delta_time;
+
+    pos_x_embed = -pos_y_ros;
+    pos_y_embed = pos_x_ros;
+
+    // Update orientation based on angular velocity (optional if tracking orientation)
+    raw_angle += current_vel_w * (180.0 / M_PI) * delta_time;  // Convert rad/s to deg/s for raw_angle update
+    if (raw_angle >= 360.0) raw_angle -= 360.0;
+    else if (raw_angle < 0.0) raw_angle += 360.0;
+}
+
+float get_delta_time() {
+    static uint32_t last_time = 0;
+    uint32_t current_time = HAL_GetTick();  // Current time in milliseconds
+    float delta_time = (current_time - last_time) / 1000.0f;  // Convert ms to seconds
+    last_time = current_time;
+    return delta_time;
+}
 
 // Function to initialize UART2 and enable interrupt
 void uart_init(UART_HandleTypeDef *huart, uint32_t baudrate, void (*isr_callback)(void)) {
@@ -357,15 +381,12 @@ void ControlLoop()
 }
 
 
-int main(void)
-{
 
-
+int main(void) {
     uint32_t refSpadCount;
     uint8_t isApertureSpads;
     uint8_t VhvSettings;
     uint8_t PhaseCal;
-
 
     HAL_Init();
     SystemClock_Config();
@@ -377,104 +398,88 @@ int main(void)
     MX_TIM4_Init();
     MX_TIM10_Init();
     HAL_TIM_OC_Start_IT(&htim10, TIM_CHANNEL_1);
-
-
-//    MX_I2C1_Init();
-//    MX_I2C2_Init();
-    HAL_Init();
-//    MX_I2C1_Init();
+    MX_I2C1_Init();
+    MX_I2C2_Init();
 
     Encoder_Init(&htim1, 3);
     Encoder_Init(&htim4, 3);
-
     arduimu_init();
 
+    // Initialize first VL53L0X sensor on I2C1
+    dev1.I2cHandle = &hi2c1;
+    dev1.I2cDevAddr = 0x52;  // Default address; change if needed
 
+    VL53L0X_WaitDeviceBooted(&dev1);
+    VL53L0X_DataInit(&dev1);
+    VL53L0X_StaticInit(&dev1);
+    VL53L0X_PerformRefCalibration(&dev1, &VhvSettings, &PhaseCal);
+    VL53L0X_PerformRefSpadManagement(&dev1, &refSpadCount, &isApertureSpads);
+    VL53L0X_SetDeviceMode(&dev1, VL53L0X_DEVICEMODE_SINGLE_RANGING);
 
-//    HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_RESET); // Disable XSHUT
-    HAL_Delay(20);
-//    HAL_GPIO_WritePin(TOF_XSHUT_GPIO_Port, TOF_XSHUT_Pin, GPIO_PIN_SET); // Enable XSHUT
-    HAL_Delay(20);
+    VL53L0X_SetLimitCheckEnable(&dev1, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, 1);
+    VL53L0X_SetLimitCheckEnable(&dev1, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, 1);
+    VL53L0X_SetLimitCheckValue(&dev1, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, (FixPoint1616_t)(0.1 * 65536));
+    VL53L0X_SetLimitCheckValue(&dev1, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, (FixPoint1616_t)(60 * 65536));
+    VL53L0X_SetMeasurementTimingBudgetMicroSeconds(&dev1, 33000);
+    VL53L0X_SetVcselPulsePeriod(&dev1, VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18);
+    VL53L0X_SetVcselPulsePeriod(&dev1, VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14);
 
+    // Initialize second VL53L0X sensor on I2C2
+    dev2.I2cHandle = &hi2c2;
+    dev2.I2cDevAddr = 0x52;  // Default address; change if needed
 
-    VL53L0X_WaitDeviceBooted( Dev );
-     VL53L0X_DataInit( Dev );
-     VL53L0X_StaticInit( Dev );
-     VL53L0X_PerformRefCalibration(Dev, &VhvSettings, &PhaseCal);
-     VL53L0X_PerformRefSpadManagement(Dev, &refSpadCount, &isApertureSpads);
-     VL53L0X_SetDeviceMode(Dev, VL53L0X_DEVICEMODE_SINGLE_RANGING);
+    VL53L0X_WaitDeviceBooted(&dev2);
+    VL53L0X_DataInit(&dev2);
+    VL53L0X_StaticInit(&dev2);
+    VL53L0X_PerformRefCalibration(&dev2, &VhvSettings, &PhaseCal);
+    VL53L0X_PerformRefSpadManagement(&dev2, &refSpadCount, &isApertureSpads);
+    VL53L0X_SetDeviceMode(&dev2, VL53L0X_DEVICEMODE_SINGLE_RANGING);
 
-     // Enable/Disable Sigma and Signal check
-     VL53L0X_SetLimitCheckEnable(Dev, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, 1);
-     VL53L0X_SetLimitCheckEnable(Dev, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, 1);
-     VL53L0X_SetLimitCheckValue(Dev, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, (FixPoint1616_t)(0.1*65536));
-     VL53L0X_SetLimitCheckValue(Dev, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, (FixPoint1616_t)(60*65536));
-     VL53L0X_SetMeasurementTimingBudgetMicroSeconds(Dev, 33000);
-     VL53L0X_SetVcselPulsePeriod(Dev, VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18);
-     VL53L0X_SetVcselPulsePeriod(Dev, VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14);
-     /* USER CODE END 2 */
+    VL53L0X_SetLimitCheckEnable(&dev2, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, 1);
+    VL53L0X_SetLimitCheckEnable(&dev2, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, 1);
+    VL53L0X_SetLimitCheckValue(&dev2, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, (FixPoint1616_t)(0.1 * 65536));
+    VL53L0X_SetLimitCheckValue(&dev2, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, (FixPoint1616_t)(60 * 65536));
+    VL53L0X_SetMeasurementTimingBudgetMicroSeconds(&dev2, 33000);
+    VL53L0X_SetVcselPulsePeriod(&dev2, VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18);
+    VL53L0X_SetVcselPulsePeriod(&dev2, VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14);
 
+    // Start PWM on TIM2, Channel 1 and Channel 2
+    if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2) != HAL_OK) Error_Handler();
+    if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1) != HAL_OK) Error_Handler();
 
-    // Start PWM on TIM2, Channel 2
-    if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2) != HAL_OK) {
-        // Handle error (e.g., light up an error LED)
-        Error_Handler();
-    }
-    if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1) != HAL_OK) {
-        // Handle error (e.g., light up an error LED)
-        Error_Handler();
-    }
+    while (1) {
+        encoder_velocity_left = Encoder_GetVelocity_TIM1(&htim1);
+        encoder_velocity_right = Encoder_GetVelocity_TIM4(&htim4);
 
-    while (1)
-    {
-        if(velocity1<0)
-        	old_vel1=velocity1;
-        if (velocity1>0)
-        	velocity1 = old_vel1;
-        if(velocity2>0)
-        	old_vel2=velocity2;
-        if (velocity2<0)
-        	velocity2 = old_vel2;
-        velocity1 = Encoder_GetVelocity_TIM1(&htim1);
-        velocity2 = Encoder_GetVelocity_TIM4(&htim4); // Assuming velocity is in counts per minute
+        current_rpm_left = 60 * encoder_velocity_left / cpr;
+        current_rpm_right = 60 * encoder_velocity_right / cpr;
 
-    	current_rpm_left = 60* old_vel1/cpr;
-    	current_rpm_right = 60* old_vel2/cpr;
-
-        switch (correction_choice) {
-            case rpm_corr: {
-
-            } break;
-
-            case angle_corr: {
-
-            } break;
-
-            case seedhe: {
-
-            } break;
-
-            case posi_corr: {
-                // Implement position correction as needed
-            } break;
+        switch (navigation) {
+            case start: req_vel_x = 0.18; navigation++; break;
+            case stop:
+                if (pos_x_embed > 0.05) {
+                    req_vel_x = 0;
+                    navigation++;
+                }
+                break;
+            case stop_plus: break;
         }
 
+        delta_time = get_delta_time();
+        update_pos_position(raw_angle, delta_time);
+        vel_to_rpm();
+        rpm_to_pwm();
 
-    	vel_to_rpm();
-    	rpm_to_pwm();
+        if (delay_counter % 500 == 0) LED_Blink();
 
+        if (delay_counter % 10 == 0) {
+            VL53L0X_PerformSingleRangingMeasurement(&dev1, &RangingData1);
+            VL53L0X_PerformSingleRangingMeasurement(&dev2, &RangingData2);
+            // Use RangingData1 and RangingData2 for distance measurements
+        }
 
-	    if(delay_counter%500 == 0)  // Assuming 10 iterations for your required delay
-	    {
-	        LED_Blink();
-	    }
-	    if(delay_counter%10 == 0)  // Assuming 10 iterations for your required delay
-	    {
-	        VL53L0X_PerformSingleRangingMeasurement(Dev, &RangingData);
-	    }
-	    delay_counter++;
-	    arduimu_poll();
-
+        delay_counter++;
+        arduimu_poll();
     }
 }
 
@@ -646,100 +651,83 @@ void MX_I2C2_Init(void)
         Error_Handler();
     }
 }
+
+
 void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
 {
+	GPIO_InitTypeDef GPIO_InitStruct = {0};
 
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
+	if(i2cHandle->Instance == I2C1)
+	{
+		/* I2C1 GPIO Configuration */
+		__HAL_RCC_GPIOB_CLK_ENABLE();
+		/**I2C1 GPIO Configuration
+		PB8     ------> I2C1_SCL
+		PB9     ------> I2C1_SDA
+		*/
+		GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;
+		GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+		GPIO_InitStruct.Pull = GPIO_PULLUP;
+		GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+		GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
+		HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
+		/* I2C1 clock enable */
+		__HAL_RCC_I2C1_CLK_ENABLE();
+	}
 
+	if(i2cHandle->Instance == I2C2)
+	{
+		/* I2C2 GPIO Configuration */
+		__HAL_RCC_GPIOB_CLK_ENABLE();
+		/**I2C2 GPIO Configuration
+		PB10     ------> I2C2_SCL
+		PB3      ------> I2C2_SDA
+		*/
+		GPIO_InitStruct.Pin = GPIO_PIN_10 | GPIO_PIN_3;
+		GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+		GPIO_InitStruct.Pull = GPIO_PULLUP;
+		GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
 
+		// Set alternate function for each pin individually
+		GPIO_InitStruct.Alternate = GPIO_AF4_I2C2;  // I2C2 SCL on PB10
+		HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  if(i2cHandle->Instance==I2C1)
-  {
-  /* USER CODE BEGIN I2C1_MspInit 0 */
+		GPIO_InitStruct.Pin = GPIO_PIN_3;
+		GPIO_InitStruct.Alternate = GPIO_AF9_I2C2;  // I2C2 SDA on PB3
+		HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /* USER CODE END I2C1_MspInit 0 */
-
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    /**I2C1 GPIO Configuration
-    PB8     ------> I2C1_SCL
-    PB9     ------> I2C1_SDA
-    */
-    GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_9;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
-    GPIO_InitStruct.Pull = GPIO_PULLUP;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-    /* I2C1 clock enable */
-    __HAL_RCC_I2C1_CLK_ENABLE();
-  /* USER CODE BEGIN I2C1_MspInit 1 */
-
-  /* USER CODE END I2C1_MspInit 1 */
-  }
-  else if(i2cHandle->Instance==I2C2)
-  {
-  /* USER CODE BEGIN I2C2_MspInit 0 */
-
-  /* USER CODE END I2C2_MspInit 0 */
-
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    /**I2C2 GPIO Configuration
-    PB10     ------> I2C2_SCL
-    PB3     ------> I2C2_SDA
-    */
-    GPIO_InitStruct.Pin = GPIO_PIN_10;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
-    GPIO_InitStruct.Pull = GPIO_PULLUP;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    GPIO_InitStruct.Alternate = GPIO_AF4_I2C2;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-    GPIO_InitStruct.Pin = GPIO_PIN_3;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
-    GPIO_InitStruct.Pull = GPIO_PULLUP;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    GPIO_InitStruct.Alternate = GPIO_AF9_I2C2;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-    /* Peripheral clock enable */
-    __HAL_RCC_I2C2_CLK_ENABLE();
-  /* USER CODE BEGIN I2C2_MspInit 1 */
-
-  /* USER CODE END I2C2_MspInit 1 */
-  }
-
+		/* I2C2 clock enable */
+		__HAL_RCC_I2C2_CLK_ENABLE();
+	}
 }
-
 
 
 void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
 {
 
-  if(i2cHandle->Instance==I2C1)
-  {
-  /* USER CODE BEGIN I2C1_MspDeInit 0 */
+	  if(i2cHandle->Instance==I2C1)
+	  {
 
-  /* USER CODE END I2C1_MspDeInit 0 */
-    /* Peripheral clock disable */
-    __HAL_RCC_I2C1_CLK_DISABLE();
-    __HAL_RCC_I2C2_CLK_DISABLE();
+	    /* Peripheral clock disable */
+	    __HAL_RCC_I2C1_CLK_DISABLE();
 
-    /**I2C1 GPIO Configuration
-    PB8     ------> I2C1_SCL
-    PB9     ------> I2C1_SDA
-    */
-    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_8|GPIO_PIN_9);
-    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_10);
+	    /**I2C1 GPIO Configuration
+	    PB8     ------> I2C1_SCL
+	    PB9     ------> I2C1_SDA
+	    */
+	    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_8|GPIO_PIN_9);
 
-    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_3);
+	  }
+	  if(i2cHandle->Instance==I2C2)
+	  {
 
+	    /* Peripheral clock disable */
+	    __HAL_RCC_I2C2_CLK_DISABLE();
 
-  /* USER CODE BEGIN I2C1_MspDeInit 1 */
+	    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_10|GPIO_PIN_3);
 
-  /* USER CODE END I2C1_MspDeInit 1 */
-  }
+	  }
 }
 
 // Error Handler
