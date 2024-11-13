@@ -49,8 +49,6 @@ uint32_t pwm_right = 0;        // Initial PWM for right wheel
 // Encoder Variables
 volatile int encoder_velocity_left = 0;
 volatile int encoder_velocity_right = 0;
-int old_encoder_velocity_left = 0;
-int old_encoder_velocity_right = 0;
 int cpr = 3666;
 
 // Control Loop Variables
@@ -409,19 +407,11 @@ int main(void)
 
     while (1)
     {
-        if(encoder_velocity_left<0)
-        	old_encoder_velocity_left=encoder_velocity_left;
-        if (encoder_velocity_left>0)
-        	encoder_velocity_left = old_encoder_velocity_left;
-        if(encoder_velocity_right>0)
-        	old_encoder_velocity_right=encoder_velocity_right;
-        if (encoder_velocity_right<0)
-        	encoder_velocity_right = old_encoder_velocity_right;
         encoder_velocity_left = Encoder_GetVelocity_TIM1(&htim1);
         encoder_velocity_right = Encoder_GetVelocity_TIM4(&htim4); // Assuming velocity is in counts per minute
 
-    	current_rpm_left = 60* old_encoder_velocity_left/cpr;
-    	current_rpm_right = 60* old_encoder_velocity_right/cpr;
+    	current_rpm_left = 60* encoder_velocity_left/cpr;
+    	current_rpm_right = 60* encoder_velocity_right/cpr;
 
         switch (correction_choice) {
             case rpm_corr: {
@@ -437,10 +427,9 @@ int main(void)
             } break;
 
             case posi_corr: {
-                // Implement position correction as needed
+
             } break;
         }
-
 
     	vel_to_rpm();
     	rpm_to_pwm();
