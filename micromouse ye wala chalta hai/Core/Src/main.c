@@ -195,6 +195,7 @@ float target_rpm_right = 150.0f; // Desired velocity in RPM
 int current_rpm_right = 0;
 
 
+
 // General PID Compute Function
 float PID_Compute(PIDController *pid, float setpoint, float measurement) {
     float error = setpoint - measurement;
@@ -434,8 +435,8 @@ int main(void)
         	old_vel2=velocity2;
         if (velocity2<0)
         	velocity2 = old_vel2;
-    	velocity1 = Encoder_GetVelocity(&htim1);
-        velocity2 = Encoder_GetVelocity(&htim4); // Assuming velocity is in counts per minute
+        velocity1 = Encoder_GetVelocity_TIM1(&htim1);
+        velocity2 = Encoder_GetVelocity_TIM4(&htim4); // Assuming velocity is in counts per minute
 
     	current_rpm_left = 60* old_vel1/cpr;
     	current_rpm_right = 60* old_vel2/cpr;
