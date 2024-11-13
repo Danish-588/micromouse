@@ -78,6 +78,8 @@ float sensorData[7]; // Adjust size based on your usage
 int theta_correction = 1;
 volatile float req_vel_x = 0.0;
 volatile float req_vel_w = 0.0;
+volatile float current_vel_x = 0.0;
+volatile float current_vel_w = 0.0;
 
 /* ============================================
  *    4. Structures and Typedefs
@@ -142,8 +144,10 @@ void uart_init(UART_HandleTypeDef *huart, uint32_t baudrate, void (*isr_callback
 
 // PID Functions
 float PID_Compute(PIDController *pid, float setpoint, float measurement);
+float get_delta_time();
 void vel_to_rpm();
 void rpm_to_pwm();
+void update_pos_position(float raw_angle, float delta_time);
 
 // Control Loop
 void ControlLoop(void);
@@ -170,12 +174,17 @@ float current_rpm_left = 0.0f;
 float target_rpm_right = 0.0f; // Desired velocity in RPM
 float current_rpm_right = 0.0f;
 
-float cartesian_x = 0;
-float target_cartesian_x = 0;
-float cartesian_y = 0;
-float target_cartesian_y = 0;
+volatile float pos_x_ros = 0;
+volatile float pos_y_ros = 0;
+volatile float pos_x_embed = 0;
+volatile float pos_y_embed = 0;
+volatile float target_pos_x = 0;
+volatile float target_pos_y = 0;
 
+volatile float current_vel_left = 0.0;
+volatile float current_vel_right = 0.0;
 
+volatile float delta_time = 0.0f;
 
 // General PID Compute Function
 float PID_Compute(PIDController *pid, float setpoint, float measurement) {
@@ -220,6 +229,35 @@ void rpm_to_pwm()
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwm_right);
 }
 
+// Function to update pos position using current linear and angular velocities
+void update_pos_position(float raw_angle, float delta_time) {
+    // Convert raw_angle to radians
+    float angle_rad = raw_angle * (M_PI / 180.0);
+    current_vel_left = (current_rpm_left * RPM_TO_RPS) * WHEEL_RADIUS;
+    current_vel_right = (current_rpm_right * RPM_TO_RPS) * WHEEL_RADIUS;
+
+    // Calculate the forward velocity as the average of left and right velocities
+    current_vel_x = ((current_vel_left*dir1) + (current_vel_right*dir2)) / 2.0;
+    // Update pos position using current_vel_x and current_vel_w
+    pos_x_ros += current_vel_x * cos(angle_rad) * delta_time;
+    pos_y_ros += current_vel_x * sin(angle_rad) * delta_time;
+
+    pos_x_embed = -pos_y_ros;
+    pos_y_embed = pos_x_ros;
+
+    // Update orientation based on angular velocity (optional if tracking orientation)
+    raw_angle += current_vel_w * (180.0 / M_PI) * delta_time;  // Convert rad/s to deg/s for raw_angle update
+    if (raw_angle >= 360.0) raw_angle -= 360.0;
+    else if (raw_angle < 0.0) raw_angle += 360.0;
+}
+
+float get_delta_time() {
+    static uint32_t last_time = 0;
+    uint32_t current_time = HAL_GetTick();  // Current time in milliseconds
+    float delta_time = (current_time - last_time) / 1000.0f;  // Convert ms to seconds
+    last_time = current_time;
+    return delta_time;
+}
 
 // Function to initialize UART2 and enable interrupt
 void uart_init(UART_HandleTypeDef *huart, uint32_t baudrate, void (*isr_callback)(void)) {
@@ -431,6 +469,8 @@ int main(void)
             } break;
         }
 
+        delta_time = get_delta_time();
+        update_pos_position(raw_angle, delta_time);
     	vel_to_rpm();
     	rpm_to_pwm();
 
