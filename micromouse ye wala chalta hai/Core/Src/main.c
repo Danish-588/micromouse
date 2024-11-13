@@ -38,8 +38,8 @@ UART_HandleTypeDef huart2; // Assuming using USART2 now
 /* ============================================
  *           3. Global Variables
  * ============================================ */
-#define WHEEL_RADIUS 0.05    // radius in meters (example: 5 cm)
-#define WHEEL_DISTANCE 0.3   // distance in meters (example: 30 cm)
+#define WHEEL_RADIUS 0.01315    // radius in meters
+#define WHEEL_DISTANCE 0.084   // distance in meters
 // PWM and Control Variables
 float Kp = 1.0f;   // Proportional gain
 float Ki = 0.0f;   // Integral gain
@@ -85,7 +85,7 @@ float sensorData[7]; // Adjust size based on your usage
 // Test Angle
 int test_angle = 0;
 
-int theta_correction_enabled = 1;
+int theta_correction = 1;
 volatile float req_vel_x = 0.0;
 volatile float req_vel_w = 0.0;
 
@@ -209,27 +209,25 @@ float PID_Compute(PIDController *pid, float setpoint, float measurement) {
 
 void vel_to_rpm()
 {
-    if (theta_correction_enabled) {
-        // Calculate angular error with shortest path consideration
+    static bool prev_theta_correction = false;
+
+    if (theta_correction) {
         float error = target_yaw - raw_angle;
-
-        // Adjust error to be within the range of -180 to 180 for shortest path
-        if (error > 180) {
-            error -= 360;
-        } else if (error < -180) {
-            error += 360;
-        }
-
-        // Use PID to compute required angular velocity correction based on the error
-        req_vel_w = PID_Compute(&pid_yaw, 0.0, error);  // Setpoint is 0, as we want to minimize the error
+        if (error > 180) error -= 360;
+        else if (error < -180) error += 360;
+        req_vel_w = PID_Compute(&pid_yaw, 0.0, error);
+    } else if (prev_theta_correction) {
+        req_vel_w = 0.0;
     }
-    // Compute linear velocities for each wheel
+
+    prev_theta_correction = theta_correction;
+
     double v_left = req_vel_x + (req_vel_w * WHEEL_DISTANCE / 2.0);
     double v_right = req_vel_x - (req_vel_w * WHEEL_DISTANCE / 2.0);
-    // Convert linear velocities to RPM
-    target_rpm_left = (v_left / (2 * 3.141592653589793 * WHEEL_RADIUS))	 * 60;
+    target_rpm_left = (v_left / (2 * 3.141592653589793 * WHEEL_RADIUS)) * 60;
     target_rpm_right = (v_right / (2 * 3.141592653589793 * WHEEL_RADIUS)) * 60;
 }
+
 
 void rpm_to_pwm()
 {
@@ -444,7 +442,7 @@ int main(void)
 
         switch (correction_choice) {
             case rpm_corr: {
-            	vel_to_rpm();
+
             } break;
 
             case angle_corr: {
@@ -460,9 +458,9 @@ int main(void)
             } break;
         }
 
-            	rpm_to_pwm();
 
-
+    	vel_to_rpm();
+    	rpm_to_pwm();
 
 
 	    if(delay_counter%500 == 0)  // Assuming 10 iterations for your required delay
