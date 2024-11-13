@@ -40,22 +40,17 @@ UART_HandleTypeDef huart2; // Assuming using USART2 now
  * ============================================ */
 #define WHEEL_RADIUS 0.01315    // radius in meters
 #define WHEEL_DISTANCE 0.084   // distance in meters
-// PWM and Control Variables
-float Kp = 1.0f;   // Proportional gain
-float Ki = 0.0f;   // Integral gain
-float Kd = 0.05f;  // Derivative gain
+#define RPM_TO_RPS 0.10472     // conversion factor from RPM to radians per second (2 * PI / 60)
 
 float target_yaw = 0.0f;       // Target yaw angle (e.g., to maintain a straight path)
 uint32_t pwm_left = 0;         // Initial PWM for left wheel
 uint32_t pwm_right = 0;        // Initial PWM for right wheel
-float target_velocity = 1000.0f; // Desired velocity in encoder counts per minute
-float previous_error = 0.0f;
-float integral = 0.0f;
 
 // Encoder Variables
-volatile int velocity1 = 0;
-volatile int velocity2 = 0;
-int old_vel1 = 0, old_vel2 = 0;
+volatile int encoder_velocity_left = 0;
+volatile int encoder_velocity_right = 0;
+int old_encoder_velocity_left = 0;
+int old_encoder_velocity_right = 0;
 int cpr = 3666;
 
 // Control Loop Variables
@@ -81,9 +76,6 @@ VL53L0X_DEV Dev = &vl53l0x_c;
 
 // Message Array
 float sensorData[7]; // Adjust size based on your usage
-
-// Test Angle
-int test_angle = 0;
 
 int theta_correction = 1;
 volatile float req_vel_x = 0.0;
@@ -169,30 +161,21 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle);
  *    7. PID Control Variables for Motors
  * ============================================ */
 // PID Control Variables for Motor 1
-float Kp1 = 10.0f;  // Proportional gain
-float Ki1 = 0.0f;   // Integral gain
-float Kd1 = 0.05f;  // Derivative gain
-float previous_error1 = 0.0f;
-float integral1 = 0.0f;
 int dir1 = -1;
 
 // PID Control Variables for Motor 2
-float Kp2 = 10.0f;  // Proportional gain
-float Ki2 = 0.0f;   // Integral gain
-float Kd2 = 0.05f;  // Derivative gain
-float previous_error2 = 0.0f;
-float integral2 = 0.0f;
 int dir2 = 1;
 
-// PWM Values
-uint32_t pwm_value1 = 0;
-uint32_t pwm_value2 = 0;
-
 // RPM Targets and Current RPMs
-float target_rpm_left = 150.0f; // Desired velocity in RPM
-int current_rpm_left = 0;
-float target_rpm_right = 150.0f; // Desired velocity in RPM
-int current_rpm_right = 0;
+float target_rpm_left = 0.0f; // Desired velocity in RPM
+float current_rpm_left = 0.0f;
+float target_rpm_right = 0.0f; // Desired velocity in RPM
+float current_rpm_right = 0.0f;
+
+float cartesian_x = 0;
+float target_cartesian_x = 0;
+float cartesian_y = 0;
+float target_cartesian_y = 0;
 
 
 
@@ -223,8 +206,8 @@ void vel_to_rpm()
 
     prev_theta_correction = theta_correction;
 
-    double v_left = req_vel_x - (req_vel_w * WHEEL_DISTANCE / 2.0);
-    double v_right = req_vel_x + (req_vel_w * WHEEL_DISTANCE / 2.0);
+    double v_left = req_vel_x + (req_vel_w * WHEEL_DISTANCE / 2.0);
+    double v_right = req_vel_x - (req_vel_w * WHEEL_DISTANCE / 2.0);
     target_rpm_left = (v_left / (2 * 3.141592653589793 * WHEEL_RADIUS)) * 60;
     target_rpm_right = (v_right / (2 * 3.141592653589793 * WHEEL_RADIUS)) * 60;
 }
@@ -378,7 +361,6 @@ int main(void)
     MX_TIM10_Init();
     HAL_TIM_OC_Start_IT(&htim10, TIM_CHANNEL_1);
 
-
 //    MX_I2C1_Init();
 //    MX_I2C2_Init();
     HAL_Init();
@@ -427,19 +409,19 @@ int main(void)
 
     while (1)
     {
-        if(velocity1<0)
-        	old_vel1=velocity1;
-        if (velocity1>0)
-        	velocity1 = old_vel1;
-        if(velocity2>0)
-        	old_vel2=velocity2;
-        if (velocity2<0)
-        	velocity2 = old_vel2;
-        velocity1 = Encoder_GetVelocity_TIM1(&htim1);
-        velocity2 = Encoder_GetVelocity_TIM4(&htim4); // Assuming velocity is in counts per minute
+        if(encoder_velocity_left<0)
+        	old_encoder_velocity_left=encoder_velocity_left;
+        if (encoder_velocity_left>0)
+        	encoder_velocity_left = old_encoder_velocity_left;
+        if(encoder_velocity_right>0)
+        	old_encoder_velocity_right=encoder_velocity_right;
+        if (encoder_velocity_right<0)
+        	encoder_velocity_right = old_encoder_velocity_right;
+        encoder_velocity_left = Encoder_GetVelocity_TIM1(&htim1);
+        encoder_velocity_right = Encoder_GetVelocity_TIM4(&htim4); // Assuming velocity is in counts per minute
 
-    	current_rpm_left = 60* old_vel1/cpr;
-    	current_rpm_right = 60* old_vel2/cpr;
+    	current_rpm_left = 60* old_encoder_velocity_left/cpr;
+    	current_rpm_right = 60* old_encoder_velocity_right/cpr;
 
         switch (correction_choice) {
             case rpm_corr: {
