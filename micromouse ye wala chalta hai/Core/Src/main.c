@@ -18,7 +18,8 @@ typedef enum {
 	straight1_2,
 	turn1_2,
 	straight1_4,
-	turn1_4,
+	turn1_4_2,
+	turn1_4_4,
 	straight1_6,
 	turn1_6,
 	straight1_8,
@@ -28,6 +29,16 @@ typedef enum {
 	straight3,
 	turn3,
 	finish,
+
+	delayy,
+	astart,
+	astraight1,
+	aturn1,
+	astraight2,
+	aturn2,
+	astraight3,
+	aturn3,
+	afinish,
 } CorrectionChoice;
 
 // Global variable to hold the current correction choice
@@ -272,7 +283,7 @@ void face_east()
 }
 void move_one()
 {
-	req_vel_x =0.1;
+	req_vel_x =0.135;
 }
 void stop()
 {
@@ -612,7 +623,7 @@ int main(void) {
             	navigation++;
             break;
             case straight1:
-            	if ((1.05*3*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+            	if ((0.95 *3*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
             	{
             		stop();
             		face_west();
@@ -628,11 +639,11 @@ int main(void) {
 				}
             break;
             case straight1_2:
-            	if ((0.8*2*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+            	if ((0.95*2*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
 				{
             		stop();
             		face_north();
-                	navigation++;
+                	navigation = straight1_4;
 				}
             break;
             case turn1_2:
@@ -644,14 +655,24 @@ int main(void) {
 				}
             break;
             case straight1_4:
-            	if ((0.8*1*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+				if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+
+//            	if ((0.1*1*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
 				{
             		stop();
-            		face_south();
+            		turn_left();
                 	navigation++;
 				}
             break;
-            case turn1_4:
+            case turn1_4_2:
+            	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+				{
+            		stop();
+            		turn_left();
+                	navigation = straight1_6;
+				}
+            break;
+            case turn1_4_4:
             	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
 				{
             		move_one();
@@ -660,7 +681,9 @@ int main(void) {
 				}
             break;
             case straight1_6:
-            	if ((0.8*1*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+            	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+
+//            	if ((0.2*1*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
 				{
             		stop();
             		face_west();
@@ -672,11 +695,11 @@ int main(void) {
 				{
             		move_one();
             		ref_total_distance_traveled = total_distance_traveled;
-            		navigation++;
+            		navigation = straight2;
 				}
             break;
             case straight1_8:
-            	if ((0.8*1*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+            	if ((0.25*1*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
 				{
             		stop();
             		face_east();
@@ -692,7 +715,7 @@ int main(void) {
 				}
             break;
             case straight2:
-            	if ((0.8*1*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+            	if ((1.2*1*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
 				{
             		stop();
             		face_south();
@@ -727,8 +750,78 @@ int main(void) {
             	if (2*ONE_SQUARE< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
 				{
             		stop();
+            		navigation++;
 				}
             break;
+
+
+//            case delayy:
+//            {
+//                HAL_Delay(10000);
+//            	navigation++;
+//            }
+//            break;
+//            case astart:
+//            	move_one();
+//            	total_distance_traveled = 0;
+//            	ref_total_distance_traveled = 0;
+//        		ref_total_distance_traveled = total_distance_traveled;
+//            	navigation++;
+//            break;
+//            case astraight1:
+//            	if ((1.05*3*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+//            	{
+//            		stop();
+//            		face_west();
+//                	navigation++;
+//            	}
+//            break;
+//            case aturn1:
+//            	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+//				{
+//            		move_one();
+//            		ref_total_distance_traveled = total_distance_traveled;
+//            		navigation++;
+//				}
+//            break;
+//            case astraight2:
+//            	if ((0.8*3*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+//				{
+//            		stop();
+//            		face_south();
+//                	navigation++;
+//				}
+//            break;
+//            case aturn2:
+//            	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+//				{
+//            		move_one();
+//            		ref_total_distance_traveled = total_distance_traveled;
+//            		navigation++;
+//				}
+//            break;
+//            case astraight3:
+//            	if (3*ONE_SQUARE< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+//				{
+//            		stop();
+//            		face_east();
+//            		navigation++;
+//				}
+//            break;
+//            case aturn3:
+//            	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+//				{
+//            		move_one();
+//            		ref_total_distance_traveled = total_distance_traveled;
+//            		navigation++;
+//				}
+//            break;
+//            case afinish:
+//            	if (2*ONE_SQUARE< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+//				{
+//            		stop();
+//				}
+//            break;
         }
 
         delta_time = get_delta_time();
