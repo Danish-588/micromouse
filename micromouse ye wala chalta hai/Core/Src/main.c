@@ -5,6 +5,8 @@
 #include "i2c.h"
 #include "encoder.h"
 #include "vl53l0x_api.h"
+
+
 /* ============================================
  *           1. Enumerations
  * ============================================ */
@@ -17,6 +19,7 @@ typedef enum {
 
 // Global variable to hold the current correction choice
 CorrectionChoice navigation;
+
 
 /* ============================================
  *           2. Peripheral Handles
@@ -34,39 +37,65 @@ TIM_HandleTypeDef htim10; // Timer for Control Loop
 // UART Handle
 UART_HandleTypeDef huart2; // Assuming using USART2 now
 
+
 /* ============================================
- *           3. Global Variables
+ *           3. Global Constants and Macros
  * ============================================ */
 #define WHEEL_RADIUS 0.01315    // radius in meters
-#define WHEEL_DISTANCE 0.084   // distance in meters
-#define RPM_TO_RPS 0.10472     // conversion factor from RPM to radians per second (2 * PI / 60)
+#define WHEEL_DISTANCE 0.084    // distance in meters
+#define RPM_TO_RPS 0.10472      // conversion factor from RPM to radians per second (2 * PI / 60)
 
-float target_yaw = 0.0f;       // Target yaw angle (e.g., to maintain a straight path)
-uint32_t pwm_left = 0;         // Initial PWM for left wheel
-uint32_t pwm_right = 0;        // Initial PWM for right wheel
 
+/* ============================================
+ *           4. Motion Control Variables
+ * ============================================ */
+
+// Velocity and Position Control Variables
+volatile float req_vel_x = 0.0;
+volatile float req_vel_w = 0.0;
+volatile float current_vel_x = 0.0;
+volatile float current_vel_w = 0.0;
+volatile float current_vel_left = 0.0;
+volatile float current_vel_right = 0.0;
+volatile float delta_time = 0.0f;
+
+volatile float pos_x_ros = 0;
+volatile float pos_y_ros = 0;
+volatile float pos_x_embed = 0;
+volatile float pos_y_embed = 0;
+volatile float target_pos_x = 0;
+volatile float target_pos_y = 0;
+volatile float target_yaw = 0.0f;
+
+
+/* ============================================
+ *           5. Encoder and RPM Variables
+ * ============================================ */
 // Encoder Variables
 volatile int encoder_velocity_left = 0;
 volatile int encoder_velocity_right = 0;
 int cpr = 3666;
 
-// Control Loop Variables
-long delay_counter = 0;
-volatile int retard = 0;
+// RPM Targets and Current RPMs
+volatile float target_rpm_left = 0.0f; // Desired velocity in RPM
+volatile float current_rpm_left = 0.0f;
+volatile float target_rpm_right = 0.0f; // Desired velocity in RPM
+volatile float current_rpm_right = 0.0f;
+volatile float pwm_left = 0.0f;
+volatile float pwm_right = 0.0f;
 
-// Miscellaneous Variables
-uint8_t rx_buff2;
-uint8_t Message[64];
-uint8_t MessageLen;
-volatile uint32_t prevTime = 0;
-volatile int count = 0;
+// Directional Control
+int dir1 = -1;
+int dir2 = 1;
+
+
+/* ============================================
+ *           6. Sensor Variables
+ * ============================================ */
+// Distance Sensors
 volatile int front_sensor = 0.0f;
 volatile int left_sensor = 0.0f;
 volatile int target_left_sensor = 0.0f;
-
-// PWM Parameters for Debugging
-uint32_t pwm_frequency = 1000;  // 1 kHz default frequency
-uint32_t duty_cycle = 69;       // 69% default duty cycle
 
 // VL53L0X Variables
 VL53L0X_RangingMeasurementData_t RangingData_Center, RangingData_Side;
@@ -79,18 +108,37 @@ VL53L0X_DEV Dev_Side = &vl53l0x_s;
 
 VL53L0X_Dev_t dev1, dev2;
 VL53L0X_RangingMeasurementData_t RangingData1, RangingData2;
-// Message Array
-float sensorData[7]; // Adjust size based on your usage
 
-volatile int theta_correction = 1;
-volatile int wall_follow = 0;
-volatile float req_vel_x = 0.0;
-volatile float req_vel_w = 0.0;
-volatile float current_vel_x = 0.0;
-volatile float current_vel_w = 0.0;
 
 /* ============================================
- *    4. Structures and Typedefs
+ *           7. Communication and Miscellaneous
+ * ============================================ */
+// UART Communication Variables
+uint8_t rx_buff2;
+uint8_t Message[64];
+uint8_t MessageLen;
+float sensorData[7]; // Adjust size based on your usage
+
+// PWM Parameters for Debugging
+uint32_t pwm_frequency = 1000;  // 1 kHz default frequency
+uint32_t duty_cycle = 69;       // 69% default duty cycle
+
+// Control Loop Variables
+long delay_counter = 0;
+volatile int retard = 0;
+volatile uint32_t prevTime = 0;
+volatile int count = 0;
+
+
+/* ============================================
+ *           8. Control Flags
+ * ============================================ */
+volatile int theta_correction = 1;
+volatile int wall_follow = 0;
+
+
+/* ============================================
+ *    9. Structures and Typedefs
  * ============================================ */
 // PID Controller Struct
 typedef struct {
@@ -101,8 +149,9 @@ typedef struct {
     float previous_error;   // Previous error value
 } PIDController;
 
+
 /* ============================================
- *    5. PID Controllers Initialization
+ *    10. PID Controllers Initialization
  * ============================================ */
 // Initialize PID Controllers for Motor 1, Motor 2, and Yaw Control
 PIDController pid_motor1 = {
@@ -129,8 +178,9 @@ PIDController pid_yaw = {
     .previous_error = 0.0f
 };
 
+
 /* ============================================
- *         6. Function Prototypes
+ *         11. Function Prototypes
  * ============================================ */
 // System and Peripheral Initialization
 void SystemClock_Config(void);
@@ -168,32 +218,7 @@ void Error_Handler(void);
 void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle);
 void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle);
 
-/* ============================================
- *    7. PID Control Variables for Motors
- * ============================================ */
-// PID Control Variables for Motor 1
-int dir1 = -1;
 
-// PID Control Variables for Motor 2
-int dir2 = 1;
-
-// RPM Targets and Current RPMs
-float target_rpm_left = 0.0f; // Desired velocity in RPM
-float current_rpm_left = 0.0f;
-float target_rpm_right = 0.0f; // Desired velocity in RPM
-float current_rpm_right = 0.0f;
-
-volatile float pos_x_ros = 0;
-volatile float pos_y_ros = 0;
-volatile float pos_x_embed = 0;
-volatile float pos_y_embed = 0;
-volatile float target_pos_x = 0;
-volatile float target_pos_y = 0;
-
-volatile float current_vel_left = 0.0;
-volatile float current_vel_right = 0.0;
-
-volatile float delta_time = 0.0f;
 
 // General PID Compute Function
 float PID_Compute(PIDController *pid, float setpoint, float measurement) {
