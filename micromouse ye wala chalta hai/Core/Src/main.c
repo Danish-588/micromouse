@@ -135,7 +135,8 @@ volatile int count = 0;
  * ============================================ */
 volatile int theta_correction = 1;
 volatile int wall_follow = 0;
-
+volatile int translate = 0;
+volatile int yaw_first = 1;
 
 /* ============================================
  *    9. Structures and Typedefs
@@ -207,6 +208,7 @@ void vel_gen();
 void vel_to_rpm();
 void rpm_to_pwm();
 void update_pos_position(float raw_angle, float delta_time);
+void wait_for_yaw();
 
 // Control Loop
 void ControlLoop(void);
@@ -263,10 +265,21 @@ void vel_gen()
 
 void vel_to_rpm()
 {
-    double v_left = req_vel_x + (req_vel_w * WHEEL_DISTANCE / 2.0);
-    double v_right = req_vel_x - (req_vel_w * WHEEL_DISTANCE / 2.0);
-    target_rpm_left = (v_left / (2 * 3.141592653589793 * WHEEL_RADIUS)) * 60;
-    target_rpm_right = (v_right / (2 * 3.141592653589793 * WHEEL_RADIUS)) * 60;
+	double v_left=0;
+	double v_right=0;
+	if (translate)
+	{
+		v_left = req_vel_x + (req_vel_w * WHEEL_DISTANCE / 2.0);
+		v_right = req_vel_x - (req_vel_w * WHEEL_DISTANCE / 2.0);
+	}
+	else
+	{
+		v_left = (req_vel_w * WHEEL_DISTANCE / 2.0);
+		v_right = -1* (req_vel_w * WHEEL_DISTANCE / 2.0);
+	}
+	target_rpm_left = (v_left / (2 * 3.141592653589793 * WHEEL_RADIUS)) * 60;
+	target_rpm_right = (v_right / (2 * 3.141592653589793 * WHEEL_RADIUS)) * 60;
+
 }
 
 
@@ -299,6 +312,24 @@ void update_pos_position(float raw_angle, float delta_time) {
     raw_angle += current_vel_w * (180.0 / M_PI) * delta_time;  // Convert rad/s to deg/s for raw_angle update
     if (raw_angle >= 360.0) raw_angle -= 360.0;
     else if (raw_angle < 0.0) raw_angle += 360.0;
+}
+
+
+void wait_for_yaw() {
+        float angle_diff = fabs(target_yaw - raw_angle);
+
+        if (angle_diff > 180) {
+            angle_diff = 360 - angle_diff;
+        }
+
+        if (angle_diff<=5)
+        {
+        	translate = 1;
+        }
+        else
+        {
+        	translate = 0;
+        }
 }
 
 float get_delta_time() {
@@ -500,19 +531,25 @@ int main(void) {
         current_rpm_right = 60 * encoder_velocity_right / cpr;
 
         switch (navigation) {
-            case start: req_vel_x = 0.18; navigation++; break;
+            case start:
+            	req_vel_x = 0.18;
+            	navigation++;
+            break;
             case stop:
-                if (pos_x_embed > 0.05) {
-                    req_vel_x = 0;
-                    navigation++;
-                }
-                break;
-            case stop_plus: break;
+				if (pos_x_embed > 0.05) {
+					req_vel_x = 0;
+					navigation++;
+				}
+			break;
+            case stop_plus:
+            break;
         }
 
         delta_time = get_delta_time();
         update_pos_position(raw_angle, delta_time);
 
+        if (yaw_first)
+        	wait_for_yaw();
         vel_gen();
         vel_to_rpm();
         rpm_to_pwm();
