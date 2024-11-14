@@ -254,7 +254,15 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle);
 
 
 
-
+void fix_angle()
+{
+    while (raw_angle >= 360.0f) {
+    	raw_angle -= 360.0f;
+    }
+    while (raw_angle < 0.0f) {
+    	raw_angle += 360.0f;
+    }
+}
 
 
 void turn_left()
@@ -329,7 +337,7 @@ void vel_gen()
     if (wall_follow)
     {
 		float error = (target_left_sensor - left_sensor) * -1;
-		req_vel_w = PID_Compute(&pid_yaw, 0.0f, error);
+		req_vel_w = PID_Compute(&pid_yaw, 0.0f, error/10);
     }
     else if (prev_wall_follow)
         req_vel_w = 0.0;
@@ -620,26 +628,33 @@ int main(void) {
             case start:
             	move_one();
         		ref_total_distance_traveled = total_distance_traveled;
+        		target_left_sensor = 44;
+        		wall_follow = 1;
+
             	navigation++;
             break;
             case straight1:
-            	if ((0.95 *3*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+//            	if ((0.95 *3*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+				if (front_sensor <210)
             	{
             		stop();
+            		wall_follow = 0;
             		face_west();
                 	navigation++;
             	}
             break;
             case turn1:
-            	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+            	if (is_within_angle_threshold(raw_angle, target_yaw, 3))
 				{
             		move_one();
+            		target_left_sensor = 44;
+            		wall_follow = 1;
             		ref_total_distance_traveled = total_distance_traveled;
             		navigation++;
 				}
             break;
             case straight1_2:
-            	if ((0.95*2*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+            	if (front_sensor < 236)
 				{
             		stop();
             		face_north();
@@ -829,6 +844,7 @@ int main(void) {
 
         if (yaw_first)
         	wait_for_yaw();
+        fix_angle();
         vel_gen();
         vel_to_rpm();
         rpm_to_pwm();
