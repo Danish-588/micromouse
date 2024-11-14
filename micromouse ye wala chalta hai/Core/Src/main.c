@@ -13,8 +13,32 @@
 // Correction Modes Enumeration
 typedef enum {
 	start,
-	stop,
-	stop_plus,
+	straight1,
+	turn1,
+	straight1_2,
+	turn1_2,
+	straight1_4,
+	turn1_4_2,
+	turn1_4_4,
+	straight1_6,
+	turn1_6,
+	straight1_8,
+	turn1_8,
+	straight2,
+	turn2,
+	straight3,
+	turn3,
+	finish,
+
+	delayy,
+	astart,
+	astraight1,
+	aturn1,
+	astraight2,
+	aturn2,
+	astraight3,
+	aturn3,
+	afinish,
 } CorrectionChoice;
 
 // Global variable to hold the current correction choice
@@ -45,7 +69,8 @@ UART_HandleTypeDef huart2; // Assuming using USART2 now
 #define WHEEL_DISTANCE 0.084    // distance in meters
 #define RPM_TO_RPS 0.10472      // conversion factor from RPM to radians per second (2 * PI / 60)
 
-
+#define ONE_SQUARE 0.070
+#define HALF_SQUARE 0.065
 /* ============================================
  *           4. Motion Control Variables
  * ============================================ */
@@ -180,6 +205,10 @@ PIDController pid_yaw = {
 };
 
 
+
+float total_distance_traveled = 0.0;
+float ref_total_distance_traveled = 0.0;
+
 /* ============================================
  *         11. Function Prototypes
  * ============================================ */
@@ -222,6 +251,61 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle);
 
 
 
+
+
+
+void fix_angle()
+{
+    while (raw_angle >= 360.0f) {
+    	raw_angle -= 360.0f;
+    }
+    while (raw_angle < 0.0f) {
+    	raw_angle += 360.0f;
+    }
+}
+
+
+void turn_left()
+{
+	target_yaw -=90;
+}
+void turn_right()
+{
+	target_yaw +=90;
+}
+void face_north()
+{
+	target_yaw =0;
+}
+void face_south()
+{
+	target_yaw =180;
+}
+void face_west()
+{
+	target_yaw =90;
+}
+void face_east()
+{
+	target_yaw =270;
+}
+void move_one()
+{
+	req_vel_x =0.135;
+}
+void stop()
+{
+	req_vel_x =0;
+}
+
+bool is_within_angle_threshold(float angle, float target, float threshold) {
+    float diff = fmod(fabs(angle - target), 360.0);
+    if (diff > 180.0) {
+        diff = 360.0 - diff;  // Use the shortest angular distance
+    }
+    return diff <= threshold;
+}
+
 // General PID Compute Function
 float PID_Compute(PIDController *pid, float setpoint, float measurement) {
     float error = setpoint - measurement;
@@ -253,7 +337,7 @@ void vel_gen()
     if (wall_follow)
     {
 		float error = (target_left_sensor - left_sensor) * -1;
-		req_vel_w = PID_Compute(&pid_yaw, 0.0f, error);  // Setpoint is 0 as we want error to be zero
+		req_vel_w = PID_Compute(&pid_yaw, 0.0f, error/10);
     }
     else if (prev_wall_follow)
         req_vel_w = 0.0;
@@ -301,6 +385,8 @@ void update_pos_position(float raw_angle, float delta_time) {
 
     // Calculate the forward velocity as the average of left and right velocities
     current_vel_x = ((current_vel_left*dir1) + (current_vel_right*dir2)) / 2.0;
+
+    total_distance_traveled += fabs(current_vel_x * delta_time);
     // Update pos position using current_vel_x and current_vel_w
     pos_x_ros += current_vel_x * cos(angle_rad) * delta_time;
     pos_y_ros += current_vel_x * sin(angle_rad) * delta_time;
@@ -523,6 +609,13 @@ int main(void) {
     if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2) != HAL_OK) Error_Handler();
     if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1) != HAL_OK) Error_Handler();
 
+    stop();
+    vel_gen();
+    vel_to_rpm();
+    rpm_to_pwm();
+
+    HAL_Delay(10000);
+
     while (1) {
         encoder_velocity_left = Encoder_GetVelocity_TIM1(&htim1);
         encoder_velocity_right = Encoder_GetVelocity_TIM4(&htim4);
@@ -531,18 +624,219 @@ int main(void) {
         current_rpm_right = 60 * encoder_velocity_right / cpr;
 
         switch (navigation) {
+
             case start:
-            	req_vel_x = 0.18;
+            	move_one();
+        		ref_total_distance_traveled = total_distance_traveled;
+        		target_left_sensor = 44;
+        		wall_follow = 1;
+
             	navigation++;
             break;
-            case stop:
-				if (pos_x_embed > 0.05) {
-					req_vel_x = 0;
-					navigation++;
-				}
-			break;
-            case stop_plus:
+            case straight1:
+//            	if ((0.95 *3*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+				if (front_sensor <210)
+            	{
+            		stop();
+            		wall_follow = 0;
+            		face_west();
+                	navigation++;
+            	}
             break;
+            case turn1:
+            	if (is_within_angle_threshold(raw_angle, target_yaw, 3))
+				{
+            		move_one();
+            		target_left_sensor = 44;
+            		wall_follow = 1;
+            		ref_total_distance_traveled = total_distance_traveled;
+            		navigation++;
+				}
+            break;
+            case straight1_2:
+            	if (front_sensor < 236)
+				{
+            		stop();
+            		face_north();
+                	navigation = straight1_4;
+				}
+            break;
+            case turn1_2:
+            	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+				{
+            		move_one();
+            		ref_total_distance_traveled = total_distance_traveled;
+            		navigation++;
+				}
+            break;
+            case straight1_4:
+				if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+
+//            	if ((0.1*1*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+				{
+            		stop();
+            		turn_left();
+                	navigation++;
+				}
+            break;
+            case turn1_4_2:
+            	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+				{
+            		stop();
+            		turn_left();
+                	navigation = straight1_6;
+				}
+            break;
+            case turn1_4_4:
+            	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+				{
+            		move_one();
+            		ref_total_distance_traveled = total_distance_traveled;
+            		navigation++;
+				}
+            break;
+            case straight1_6:
+            	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+
+//            	if ((0.2*1*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+				{
+            		stop();
+            		face_west();
+                	navigation++;
+				}
+            break;
+            case turn1_6:
+            	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+				{
+            		move_one();
+            		ref_total_distance_traveled = total_distance_traveled;
+            		navigation = straight2;
+				}
+            break;
+            case straight1_8:
+            	if ((0.25*1*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+				{
+            		stop();
+            		face_east();
+                	navigation++;
+				}
+            break;
+            case turn1_8:
+            	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+				{
+            		move_one();
+            		ref_total_distance_traveled = total_distance_traveled;
+            		navigation++;
+				}
+            break;
+            case straight2:
+            	if ((1.2*1*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+				{
+            		stop();
+            		face_south();
+                	navigation++;
+				}
+            break;
+            case turn2:
+            	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+				{
+            		move_one();
+            		ref_total_distance_traveled = total_distance_traveled;
+            		navigation++;
+				}
+            break;
+            case straight3:
+            	if (3*ONE_SQUARE< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+				{
+            		stop();
+            		face_east();
+            		navigation++;
+				}
+            break;
+            case turn3:
+            	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+				{
+            		move_one();
+            		ref_total_distance_traveled = total_distance_traveled;
+            		navigation++;
+				}
+            break;
+            case finish:
+            	if (2*ONE_SQUARE< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+				{
+            		stop();
+            		navigation++;
+				}
+            break;
+
+
+//            case delayy:
+//            {
+//                HAL_Delay(10000);
+//            	navigation++;
+//            }
+//            break;
+//            case astart:
+//            	move_one();
+//            	total_distance_traveled = 0;
+//            	ref_total_distance_traveled = 0;
+//        		ref_total_distance_traveled = total_distance_traveled;
+//            	navigation++;
+//            break;
+//            case astraight1:
+//            	if ((1.05*3*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+//            	{
+//            		stop();
+//            		face_west();
+//                	navigation++;
+//            	}
+//            break;
+//            case aturn1:
+//            	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+//				{
+//            		move_one();
+//            		ref_total_distance_traveled = total_distance_traveled;
+//            		navigation++;
+//				}
+//            break;
+//            case astraight2:
+//            	if ((0.8*3*ONE_SQUARE)< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+//				{
+//            		stop();
+//            		face_south();
+//                	navigation++;
+//				}
+//            break;
+//            case aturn2:
+//            	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+//				{
+//            		move_one();
+//            		ref_total_distance_traveled = total_distance_traveled;
+//            		navigation++;
+//				}
+//            break;
+//            case astraight3:
+//            	if (3*ONE_SQUARE< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+//				{
+//            		stop();
+//            		face_east();
+//            		navigation++;
+//				}
+//            break;
+//            case aturn3:
+//            	if (is_within_angle_threshold(raw_angle, target_yaw, 5))
+//				{
+//            		move_one();
+//            		ref_total_distance_traveled = total_distance_traveled;
+//            		navigation++;
+//				}
+//            break;
+//            case afinish:
+//            	if (2*ONE_SQUARE< (fabs(total_distance_traveled)-fabs(ref_total_distance_traveled)))
+//				{
+//            		stop();
+//				}
+//            break;
         }
 
         delta_time = get_delta_time();
@@ -550,6 +844,7 @@ int main(void) {
 
         if (yaw_first)
         	wait_for_yaw();
+        fix_angle();
         vel_gen();
         vel_to_rpm();
         rpm_to_pwm();
@@ -561,7 +856,6 @@ int main(void) {
             left_sensor = RangingData1.RangeMilliMeter;
             VL53L0X_PerformSingleRangingMeasurement(&dev2, &RangingData2);
             front_sensor = RangingData2.RangeMilliMeter;
-
         }
 
         delay_counter++;
