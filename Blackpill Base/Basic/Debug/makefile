@@ -61,8 +61,8 @@ all:
 main-build: Basic.elf secondary-outputs
 
 # Tool invocations
-Basic.elf Basic.map: $(OBJS) $(USER_OBJS) C:\Users\danis\STM32CubeIDE\Blackpill\Basic\STM32F401CCUX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "Basic.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\danis\STM32CubeIDE\Blackpill\Basic\STM32F401CCUX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Basic.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+Basic.elf Basic.map: $(OBJS) $(USER_OBJS) C:\Users\danis\OneDrive\Documents\Repos\micromouse\Blackpill\ Base\Basic\STM32F401CCUX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "Basic.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\danis\OneDrive\Documents\Repos\micromouse\Blackpill Base\Basic\STM32F401CCUX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Basic.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
@@ -82,7 +82,7 @@ clean:
 	-@echo ' '
 
 post-build:
-	"C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe" -c port=USB1 -d "C:\Users\danis\STM32CubeIDE\Blackpill\Basic\Debug\Basic.elf" 0x08000000
+	"C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe" -c port=USB1 -d "C:\Users\danis\OneDrive\Documents\Repos\micromouse\Blackpill Base\Basic\Debug\Basic.elf" 0x08000000
 	-@echo ' '
 
 secondary-outputs: $(SIZE_OUTPUT) $(OBJDUMP_LIST)
